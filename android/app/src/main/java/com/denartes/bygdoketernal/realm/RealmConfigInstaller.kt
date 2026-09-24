@@ -24,8 +24,12 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
                 ?: patchDirective(line, "DataDir", paths.clientDataDir.absolutePath)
                 ?: line
         }
+        copyAssetTreeIfPresent("modules", paths.modulesConfigDir)
         copyAssetTreeIfPresent("sql", paths.sqlDir)
-        copyAssetTreeIfPresent("mariadb-share", File(paths.mariadbBaseDir, "share"))
+        copyAssetTreeIfPresent("mariadb-share", paths.mariadbBaseDir)
+        paths.mariadbLibDir.deleteRecursively()
+        paths.mariadbLibDir.mkdirs()
+        copyAssetTreeIfPresent("mariadb-libs", paths.mariadbLibDir)
     }
 
     private fun installConfig(assetName: String, destination: File, patchLine: (String) -> String) {

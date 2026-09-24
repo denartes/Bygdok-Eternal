@@ -51,6 +51,16 @@ else
     git -C "$CORE_DIR" checkout --detach "$CORE_COMMIT"
 fi
 
+for patch_file in "$REPO_DIR"/patches/azerothcore-android/*.patch; do
+    test -f "$patch_file" || continue
+    if git -C "$CORE_DIR" apply --check --ignore-space-change "$patch_file"; then
+        git -C "$CORE_DIR" apply --ignore-space-change "$patch_file"
+    elif ! git -C "$CORE_DIR" apply --reverse --check --ignore-space-change "$patch_file"; then
+        echo "AzerothCore patch cannot be applied cleanly: $patch_file" >&2
+        exit 1
+    fi
+done
+
 # Reuse the locked module list from the known-good Termux build script. Always
 # runs, even on a cache hit, so a partial/stale cached checkout can't silently
 # leave a pinned module missing (and its script loader symbol undefined).
@@ -80,7 +90,14 @@ sed -n '/^MODULES=(/,/^)/p' "$REPO_DIR/wowsp_cutoff.sh" \
 # Match the Boost compatibility patch used by wowsp_cutoff.sh.
 BOOST_CMAKE="$CORE_DIR/deps/boost/CMakeLists.txt"
 sed -i -E 's/ system / /g; s/ system$//g; s/^system //g' "$BOOST_CMAKE"
-grep -q 'CMP0167' "$BOOST_CMAKE" || sed -i '1i cmake_policy(SET CMP0167 OLD)' "$BOOST_CMAKE"
+cmake_version="$(cmake --version | sed -n '1s/.*version \([0-9]*\.[0-9]*\).*/\1/p')"
+cmake_major="${cmake_version%%.*}"
+cmake_minor="${cmake_version#*.}"
+if [ "$cmake_major" -gt 3 ] || { [ "$cmake_major" -eq 3 ] && [ "$cmake_minor" -ge 30 ]; }; then
+    grep -q 'CMP0167' "$BOOST_CMAKE" || sed -i '1i cmake_policy(SET CMP0167 OLD)' "$BOOST_CMAKE"
+else
+    sed -i '/cmake_policy(SET CMP0167 OLD)/d' "$BOOST_CMAKE"
+fi
 
 # Build the modules maintained in this monorepo from the same commit.
 for module in "$REPO_DIR"/modules/*; do
@@ -137,10 +154,11 @@ cmake -S "$CORE_DIR" -B "$BUILD_DIR" -G Ninja \
     -DOPENSSL_SSL_LIBRARY="$OPENSSL_SSL_LIBRARY" \
     -DREADLINE_INCLUDE_DIR="$ANDROID_MYSQL_ROOT/../include" \
     -DREADLINE_LIBRARY="$ANDROID_MYSQL_ROOT/../lib/libreadline.so" \
+    -DCURSES_LIBRARY="$ANDROID_MYSQL_ROOT/../lib/libncurses.so" \
     -DCMAKE_LIBRARY_PATH="$ANDROID_MYSQL_ROOT/../lib" \
-    -DWITH_WARNINGS=1 -DTOOLS_BUILD=none -DSCRIPTS=static \
+    -DWITH_WARNINGS=1 -DTOOLS_BUILD=none -DSCRIPTS=static -DNOJEM=ON \
     -DCMAKE_CXX_FLAGS="-D__ANDROID__ -DANDROID -Wno-deprecated-literal-operator" \
-    -DCMAKE_EXE_LINKER_FLAGS="-L$BOOST_LIBRARYDIR -Wl,--allow-multiple-definition -lunwind"
+    -DCMAKE_EXE_LINKER_FLAGS="-L$BOOST_LIBRARYDIR -L$ANDROID_MYSQL_ROOT/../lib -Wl,--allow-multiple-definition -lunwind -lncurses"
 cmake --build "$BUILD_DIR" --parallel
 cmake --install "$BUILD_DIR"
 
@@ -153,6 +171,25 @@ cp "$MARIADB_RUNTIME_DIR/bin/mariadb" "$OUTPUT_DIR/bin/mariadb_client"
 chmod +x "$OUTPUT_DIR/bin/mariadbd" "$OUTPUT_DIR/bin/mariadb_client"
 cp -a "$MARIADB_RUNTIME_DIR/lib/." "$OUTPUT_DIR/lib/"
 cp -a "$MARIADB_RUNTIME_DIR/share/." "$OUTPUT_DIR/share/"
+
+# The packaged Pocket Realm provider uses APK-safe dependency filenames. Keep
+# canonical SONAME copies in the combined runtime so AzerothCore's ELF
+# dependency closure and non-Android tooling can resolve the original names.
+python3 - "$OUTPUT_DIR/lib" "$OUTPUT_DIR/share/runtime-manifest.json" <<'PY'
+import json
+import pathlib
+import shutil
+import sys
+
+library_dir = pathlib.Path(sys.argv[1])
+manifest = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+for entry in manifest.get("links", []):
+    source = library_dir / entry["apk_name"]
+    destination = library_dir / entry["logical"]
+    if not source.is_file():
+        raise SystemExit(f"Missing provider library: {source}")
+    shutil.copyfile(source, destination)
+PY
 
 # Mirror the SQL update tree so the on-device AzerothCore updater can find
 # base/update SQL via SourceDirectory, matching how the source checkout is
@@ -177,7 +214,7 @@ for binary in "$OUTPUT_DIR/bin/authserver" "$OUTPUT_DIR/bin/worldserver" "$OUTPU
         case "$library" in
             libc.so|libdl.so|liblog.so|libm.so|libandroid.so|libc++abi.so) continue ;;
         esac
-        found="$(find "$MARIADB_RUNTIME_DIR/lib" "$ANDROID_RUNTIME_LIB_DIR" "$TOOLCHAIN_DIR/sysroot/usr/lib/aarch64-linux-android" -name "$library" \( -type f -o -type l \) -print -quit)"
+        found="$(find "$OUTPUT_DIR/lib" "$MARIADB_RUNTIME_DIR/lib" "$ANDROID_RUNTIME_LIB_DIR" "$TOOLCHAIN_DIR/sysroot/usr/lib/aarch64-linux-android" -name "$library" \( -type f -o -type l \) -print -quit)"
         test -n "$found" || { echo "Required runtime library not found: $library" >&2; exit 1; }
         cp -nL "$found" "$OUTPUT_DIR/lib/"
     done < <("$ANDROID_READELF" -d "$binary" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' | sort -u)

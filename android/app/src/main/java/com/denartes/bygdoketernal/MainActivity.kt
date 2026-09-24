@@ -10,14 +10,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -29,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.denartes.bygdoketernal.realm.ComponentStatus
 import com.denartes.bygdoketernal.realm.RealmForegroundService
+import com.denartes.bygdoketernal.realm.RealmPhase
 import com.denartes.bygdoketernal.realm.RealmRuntime
 
 class MainActivity : ComponentActivity() {
@@ -42,8 +49,12 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     DashboardScreen(
-                        onStart = { startForegroundService(Intent(this, RealmForegroundService::class.java)) },
+                        onStart = {
+                            RealmRuntime.beginStart()
+                            startForegroundService(Intent(this, RealmForegroundService::class.java))
+                        },
                         onStop = {
+                            RealmRuntime.resetToDefault()
                             startService(
                                 Intent(this, RealmForegroundService::class.java)
                                     .setAction(RealmForegroundService.ACTION_STOP)
@@ -73,42 +84,91 @@ private fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp)
+            .padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("BYGDOK ETERNAL", style = MaterialTheme.typography.headlineMedium)
-        Spacer(modifier = Modifier.height(32.dp))
-        Status("Database", state.database)
-        Status("Authserver", state.authserver)
-        Status("Worldserver", state.worldserver)
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(
-            onClick = if (state.isRunning || state.isBusy) onStop else onStart,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                when {
-                    state.isBusy -> "STARTING..."
-                    state.isRunning -> "STOP REALM"
-                    else -> "START REALM"
-                }
-            )
-        }
-        Spacer(modifier = Modifier.height(32.dp))
-        Text("Server Log", style = MaterialTheme.typography.titleLarge)
         Spacer(modifier = Modifier.height(8.dp))
-        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            items(logLines) { line ->
-                Text(text = line, style = MaterialTheme.typography.bodySmall)
+        StatusCard("Database", state.database)
+        StatusCard("Authserver", state.authserver)
+        StatusCard("Worldserver", state.worldserver)
+        Button(
+            onClick = if (state.isRunning) onStop else onStart,
+            enabled = !state.isBusy,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp),
+            colors = if (state.isRunning) {
+                ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            } else {
+                ButtonDefaults.buttonColors()
+            }
+        ) {
+            if (state.isBusy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.height(20.dp),
+                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.65f),
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(phaseLabel(state.phase))
+            } else {
+                Text(if (state.isRunning) "STOP REALM" else "START REALM")
+            }
+        }
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Server Log", style = MaterialTheme.typography.titleLarge)
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(logLines) { line ->
+                        Text(text = line, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun Status(label: String, status: ComponentStatus) {
-    Text(
-        text = "$label\n${status.name}",
-        style = MaterialTheme.typography.bodyLarge,
-        modifier = Modifier.padding(vertical = 6.dp)
-    )
+private fun StatusCard(label: String, status: ComponentStatus) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, style = MaterialTheme.typography.titleMedium)
+            Text(statusLabel(status), style = MaterialTheme.typography.bodyLarge)
+        }
+    }
+}
+
+private fun statusLabel(status: ComponentStatus): String = when (status) {
+    ComponentStatus.NOT_CONFIGURED -> "Not configured"
+    ComponentStatus.STARTING -> "Starting"
+    ComponentStatus.RUNNING -> "Running"
+    ComponentStatus.STOPPED -> "Stopped"
+    ComponentStatus.FAILED -> "Failed"
+}
+
+private fun phaseLabel(phase: RealmPhase): String = when (phase) {
+    RealmPhase.STARTING_DATABASE -> "Starting database..."
+    RealmPhase.STARTING_AUTHSERVER -> "Starting authserver..."
+    RealmPhase.PREPARING_CLIENT_DATA -> "Preparing client data..."
+    RealmPhase.STARTING_WORLDSERVER -> "Starting worldserver..."
+    else -> "Starting realm..."
 }

@@ -15,7 +15,7 @@ android {
         minSdk = 30
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.2.0"
     }
 
     buildTypes {
@@ -54,64 +54,84 @@ android {
 // lib<name>.so convention because only files named that way, under
 // jniLibs/<abi>/, are extracted to a location the OS will execute from
 // (Android blocks executing arbitrary files from app-writable storage).
-// If the runtime artifact hasn't been built/downloaded, this is a no-op
-// and the resulting APK is dashboard-only, exactly as before this change.
+// The application is self-contained; do not permit dashboard-only APKs.
 val nativeRuntimeDir = file("../../runtime/build/bygdok-runtime-arm64")
+val mariaDbRuntimeDir = file("../../runtime/build/mariadb-arm64")
 val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
 val assetsSqlDir = file("src/main/assets/sql")
 val assetsMariaDbShareDir = file("src/main/assets/mariadb-share")
+val assetsMariaDbLibDir = file("src/main/assets/mariadb-libs")
 
 tasks.register("embedNativeRuntime") {
     if (nativeRuntimeDir.exists()) {
         inputs.dir(nativeRuntimeDir)
     }
+    if (mariaDbRuntimeDir.exists()) {
+        inputs.dir(mariaDbRuntimeDir)
+    }
     outputs.dir(jniLibsDir)
     outputs.dir(assetsSqlDir)
     outputs.dir(assetsMariaDbShareDir)
+    outputs.dir(assetsMariaDbLibDir)
 
     doLast {
-        if (!nativeRuntimeDir.exists()) {
-            if (System.getenv("GITHUB_ACTIONS") != null) {
-                error("[embedNativeRuntime] Runtime artifact missing at $nativeRuntimeDir")
-            }
-            logger.lifecycle("[embedNativeRuntime] No runtime artifact at $nativeRuntimeDir; building dashboard-only APK.")
-            return@doLast
+        if (!nativeRuntimeDir.exists() && !mariaDbRuntimeDir.exists()) {
+            error("[embedNativeRuntime] Complete runtime artifact missing at $nativeRuntimeDir")
         }
 
         jniLibsDir.deleteRecursively()
         assetsSqlDir.deleteRecursively()
         assetsMariaDbShareDir.deleteRecursively()
+        assetsMariaDbLibDir.deleteRecursively()
         jniLibsDir.mkdirs()
 
-        val executableRenames = mapOf(
-            "authserver" to "libauthserver.so",
-            "worldserver" to "libworldserver.so",
-            "mariadbd" to "libmariadbd.so",
-            "mariadb_client" to "libmariadbclient.so"
-        )
-        val binDir = File(nativeRuntimeDir, "bin")
-        executableRenames.forEach { (sourceName, destName) ->
-            val sourceFile = File(binDir, sourceName)
+        if (nativeRuntimeDir.exists()) {
+            val serverExecutables = mapOf(
+                "authserver" to "libauthserver.so",
+                "worldserver" to "libworldserver.so"
+            )
+            val binDir = File(nativeRuntimeDir, "bin")
+            serverExecutables.forEach { (sourceName, destName) ->
+                val sourceFile = File(binDir, sourceName)
+                if (sourceFile.exists()) {
+                    sourceFile.copyTo(File(jniLibsDir, destName), overwrite = true)
+                }
+            }
+        }
+
+        val databaseRuntimeDir = if (mariaDbRuntimeDir.exists()) mariaDbRuntimeDir else nativeRuntimeDir
+        mapOf(
+            "mariadbd" to "libpocket_mariadbd.so",
+            "mariadb" to "libpocket_mariadb_client.so",
+            "mariadb_client" to "libpocket_mariadb_client.so"
+        ).forEach { (sourceName, destName) ->
+            val sourceFile = File(databaseRuntimeDir, "bin/$sourceName")
             if (sourceFile.exists()) {
                 sourceFile.copyTo(File(jniLibsDir, destName), overwrite = true)
             }
         }
 
-        val libDir = File(nativeRuntimeDir, "lib")
-        if (libDir.exists()) {
-            libDir.listFiles { candidate -> candidate.extension == "so" }?.forEach { library ->
-                library.copyTo(File(jniLibsDir, library.name), overwrite = true)
+        listOf(File(nativeRuntimeDir, "lib"), File(mariaDbRuntimeDir, "lib"))
+            .filter { it.exists() }
+            .forEach { libDir ->
+                libDir.listFiles { candidate -> candidate.name.contains(".so") }?.forEach { library ->
+                    library.copyTo(File(jniLibsDir, library.name), overwrite = true)
+                }
             }
-        }
 
         val sqlDir = File(nativeRuntimeDir, "sql")
         if (sqlDir.exists()) {
             sqlDir.copyRecursively(assetsSqlDir, overwrite = true)
         }
 
-        val mariaDbShareDir = File(nativeRuntimeDir, "share")
+        val mariaDbShareDir = File(databaseRuntimeDir, "share")
         if (mariaDbShareDir.exists()) {
             mariaDbShareDir.copyRecursively(assetsMariaDbShareDir, overwrite = true)
+        }
+
+        val providerLibDir = File(nativeRuntimeDir, "lib")
+        if (providerLibDir.exists()) {
+            providerLibDir.copyRecursively(assetsMariaDbLibDir, overwrite = true)
         }
 
         logger.lifecycle("[embedNativeRuntime] Embedded native runtime from $nativeRuntimeDir")

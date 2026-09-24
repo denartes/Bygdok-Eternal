@@ -11,6 +11,8 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.denartes.bygdoketernal.MainActivity
 import java.io.File
+import java.io.IOException
+import com.denartes.bygdoketernal.realm.RealmPhase
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 /**
  * Foreground service that launches the embedded mariadbd, authserver, and
@@ -37,6 +40,7 @@ class RealmForegroundService : Service() {
     private var mariadbProcess: Process? = null
     private var authserverProcess: Process? = null
     private var worldserverProcess: Process? = null
+    private var intentionalStop = false
 
     private lateinit var paths: RealmPaths
 
@@ -50,10 +54,12 @@ class RealmForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            intentionalStop = true
             stopRealm()
             return START_NOT_STICKY
         }
 
+        intentionalStop = false
         startForeground(NOTIFICATION_ID, buildNotification("Starting realm..."))
         scope.launch { startRealm() }
         return START_STICKY
@@ -69,23 +75,33 @@ class RealmForegroundService : Service() {
         try {
             paths.ensureDirectories()
             RealmConfigInstaller(this, paths).install()
-            RealmClientData.download(paths.clientDataDir) { RealmRuntime.appendLog("[client-data] $it") }
 
             startDatabase()
             startAuthserver()
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.PREPARING_CLIENT_DATA) }
+            RealmClientData.download(paths.clientDataDir) { RealmRuntime.appendLog("[client-data] $it") }
             startWorldserver()
         } catch (t: Throwable) {
             RealmRuntime.appendLog("[realm] Startup failed: ${t.message}")
             updateNotification("Realm failed to start")
-            stopRealm()
+            RealmRuntime.resetToDefault()
+            stopRealm(resetState = false)
         }
     }
 
     private suspend fun startDatabase() {
+        RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_DATABASE) }
         RealmRuntime.updateState { it.copy(database = ComponentStatus.STARTING) }
         updateNotification("Starting database...")
 
+        if (mariadbProcess?.isAlive == true) {
+            RealmRuntime.updateState { it.copy(database = ComponentStatus.RUNNING) }
+            return
+        }
+        mariadbProcess = null
+
         val basedir = paths.mariadbBaseDir
+        installDatabaseLibraryLinks()
         val bootstrapMarker = File(paths.dataDir, ".bootstrap-complete")
         val firstRun = !bootstrapMarker.isFile
         if (firstRun) {
@@ -101,24 +117,27 @@ class RealmForegroundService : Service() {
         }
 
         val process = ProcessBuilder(
-            nativeBinary("libmariadbd.so"),
+            nativeBinary("libpocket_mariadbd.so"),
             "--no-defaults",
             "--datadir=${paths.dataDir.absolutePath}",
             "--basedir=${basedir.absolutePath}",
             "--socket=${paths.socketFile.absolutePath}",
             "--pid-file=${paths.pidFile.absolutePath}",
+            "--lc-messages-dir=${File(basedir, "share").absolutePath}",
             "--bind-address=127.0.0.1",
             "--port=3306"
         )
             .directory(paths.root)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = paths.nativeLibraryDir }
+            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
             .start()
         mariadbProcess = process
         streamOutput(process, "mariadbd")
         monitorExit(process, "mariadbd") { ComponentStatus.FAILED }
 
-        waitForTcpPort("127.0.0.1", 3306, timeoutMillis = 60_000)
+        waitForTcpPort("127.0.0.1", 3306, timeoutMillis = 60_000) {
+            mariadbProcess?.isAlive == true
+        }
 
         if (firstRun) {
             bootstrapDatabaseSchema()
@@ -129,23 +148,10 @@ class RealmForegroundService : Service() {
 
     private fun initializeDatabase(basedir: File) {
         val shareDir = File(basedir, "share")
-        val sqlFiles = listOf(
-            "mysql_system_tables.sql",
-            "mysql_performance_tables.sql",
-            "mysql_system_tables_data.sql",
-            "fill_help_tables.sql",
-            "maria_add_gis_sp_bootstrap.sql",
-            "mysql_sys_schema.sql"
-        )
-        val bootstrapSql = buildString {
-            appendLine("CREATE DATABASE IF NOT EXISTS mysql;")
-            appendLine("USE mysql;")
-            appendLine("SET @auth_root_socket=NULL;")
-            sqlFiles.forEach { name -> appendLine(File(shareDir, name).readText()) }
-        }
+        val bootstrapSql = File(basedir, "bootstrap.sql").readText()
         runBlockingProcess(
             listOf(
-                nativeBinary("libmariadbd.so"),
+                nativeBinary("libpocket_mariadbd.so"),
                 "--no-defaults",
                 "--bootstrap",
                 "--silent-startup",
@@ -162,7 +168,7 @@ class RealmForegroundService : Service() {
     }
 
     private fun bootstrapDatabaseSchema() {
-        val clientBinary = File(paths.nativeLibraryDir, "libmariadbclient.so")
+        val clientBinary = File(paths.nativeLibraryDir, "libpocket_mariadb_client.so")
         if (!clientBinary.exists()) {
             RealmRuntime.appendLog("[realm] No embedded SQL client; skipping automatic user/database creation")
             return
@@ -192,53 +198,78 @@ class RealmForegroundService : Service() {
     }
 
     private suspend fun startAuthserver() {
+        RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_AUTHSERVER) }
         RealmRuntime.updateState { it.copy(authserver = ComponentStatus.STARTING) }
         updateNotification("Starting authserver...")
 
-        val process = ProcessBuilder(nativeBinary("libauthserver.so"), paths.authserverConf.absolutePath)
-            .directory(paths.root)
+        if (authserverProcess?.isAlive == true) {
+            RealmRuntime.updateState { it.copy(authserver = ComponentStatus.RUNNING) }
+            return
+        }
+        authserverProcess = null
+
+        val process = ProcessBuilder(
+            nativeBinary("libauthserver.so"),
+            "-c", paths.authserverConf.absolutePath
+        )
+            .directory(paths.etcDir)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = paths.nativeLibraryDir }
+            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
             .start()
         authserverProcess = process
         streamOutput(process, "authserver")
         monitorExit(process, "authserver") { ComponentStatus.FAILED }
 
-        kotlinx.coroutines.delay(2_000)
+        waitForTcpPort("127.0.0.1", 3724, 60_000) { process.isAlive }
         RealmRuntime.updateState { it.copy(authserver = ComponentStatus.RUNNING) }
     }
 
     private suspend fun startWorldserver() {
+        RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_WORLDSERVER) }
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.STARTING) }
         updateNotification("Starting worldserver...")
 
-        val process = ProcessBuilder(nativeBinary("libworldserver.so"), paths.worldserverConf.absolutePath)
-            .directory(paths.root)
+        if (worldserverProcess?.isAlive == true) {
+            RealmRuntime.updateState {
+                it.copy(worldserver = ComponentStatus.RUNNING, phase = RealmPhase.RUNNING)
+            }
+            return
+        }
+        worldserverProcess = null
+
+        val process = ProcessBuilder(
+            nativeBinary("libworldserver.so"),
+            "-c", paths.worldserverConf.absolutePath
+        )
+            .directory(paths.etcDir)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = paths.nativeLibraryDir }
+            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
             .start()
         worldserverProcess = process
         streamOutput(process, "worldserver")
         monitorExit(process, "worldserver") { ComponentStatus.FAILED }
 
-        kotlinx.coroutines.delay(2_000)
+        waitForTcpPort("127.0.0.1", 8085, 120_000) { process.isAlive }
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.RUNNING) }
+        RealmRuntime.updateState { it.copy(phase = RealmPhase.RUNNING) }
         updateNotification("Realm running")
     }
 
-    private fun stopRealm() {
+    private fun stopRealm(resetState: Boolean = true) {
         worldserverProcess?.destroyForcibly()
         authserverProcess?.destroyForcibly()
         mariadbProcess?.destroyForcibly()
         worldserverProcess = null
         authserverProcess = null
         mariadbProcess = null
-        RealmRuntime.updateState {
-            it.copy(
-                database = ComponentStatus.STOPPED,
-                authserver = ComponentStatus.STOPPED,
-                worldserver = ComponentStatus.STOPPED
-            )
+        if (resetState) {
+            RealmRuntime.updateState {
+                it.copy(
+                    database = ComponentStatus.STOPPED,
+                    authserver = ComponentStatus.STOPPED,
+                    worldserver = ComponentStatus.STOPPED
+                )
+            }
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -246,10 +277,32 @@ class RealmForegroundService : Service() {
 
     private fun nativeBinary(name: String): String = File(paths.nativeLibraryDir, name).absolutePath
 
+    private fun installDatabaseLibraryLinks() {
+        val manifest = JSONObject(File(paths.mariadbBaseDir, "runtime-manifest.json").readText())
+        val links = manifest.getJSONArray("links")
+        for (index in 0 until links.length()) {
+            val link = links.getJSONObject(index)
+            val logicalName = link.getString("logical")
+            check(File(logicalName).name == logicalName) {
+                "Invalid database runtime manifest entry"
+            }
+            val target = File(paths.mariadbLibDir, logicalName)
+            check(target.isFile) { "Missing database runtime library: $logicalName" }
+            check(target.isFile) { "Missing database runtime library: $logicalName" }
+        }
+    }
+
+    private fun databaseLibraryPath(): String =
+        "${paths.mariadbLibDir.absolutePath}:${paths.nativeLibraryDir}"
+
     private fun streamOutput(process: Process, tag: String) {
         scope.launch {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line -> RealmRuntime.appendLog("[$tag] $line") }
+            try {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line -> RealmRuntime.appendLog("[$tag] $line") }
+                }
+            } catch (_: IOException) {
+                // Process pipes can close while the service is stopping.
             }
         }
     }
@@ -258,6 +311,22 @@ class RealmForegroundService : Service() {
         scope.launch {
             val exitCode = process.waitFor()
             RealmRuntime.appendLog("[$tag] exited with code $exitCode")
+            val status = onExit()
+            when (tag) {
+                "authserver" -> if (authserverProcess === process) authserverProcess = null
+                "worldserver" -> if (worldserverProcess === process) worldserverProcess = null
+                "mariadbd" -> if (mariadbProcess === process) mariadbProcess = null
+            }
+            if (!intentionalStop) {
+                RealmRuntime.updateState {
+                    when (tag) {
+                        "authserver" -> it.copy(authserver = status, phase = if (status == ComponentStatus.FAILED) RealmPhase.FAILED else it.phase)
+                        "worldserver" -> it.copy(worldserver = status, phase = if (status == ComponentStatus.FAILED) RealmPhase.FAILED else it.phase)
+                        "mariadbd" -> it.copy(database = status, phase = if (status == ComponentStatus.FAILED) RealmPhase.FAILED else it.phase)
+                        else -> it
+                    }
+                }
+            }
         }
     }
 
@@ -265,7 +334,7 @@ class RealmForegroundService : Service() {
         val process = ProcessBuilder(command)
             .directory(paths.root)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = paths.nativeLibraryDir }
+            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
             .start()
         if (standardInput != null) {
             process.outputStream.bufferedWriter().use { it.write(standardInput) }
@@ -279,9 +348,15 @@ class RealmForegroundService : Service() {
         check(exitCode == 0) { "$logPrefix exited with code $exitCode" }
     }
 
-    private suspend fun waitForTcpPort(host: String, port: Int, timeoutMillis: Long) {
+    private suspend fun waitForTcpPort(
+        host: String,
+        port: Int,
+        timeoutMillis: Long,
+        isProcessAlive: () -> Boolean = { true }
+    ) {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (System.currentTimeMillis() < deadline) {
+            check(isProcessAlive()) { "Process exited before $host:$port became ready" }
             try {
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(host, port), 1_000)

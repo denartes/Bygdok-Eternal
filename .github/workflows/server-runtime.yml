@@ -1,30 +1,6 @@
 name: Server Runtime
 
 on:
-  pull_request:
-    paths:
-      - "modules/**"
-      - "configs/**"
-      - "*.sh"
-      - "runtime/**"
-      - "patches/mariadb-10.11.9/**"
-      - ".github/workflows/mariadb-runtime.yml"
-      - ".github/workflows/server-runtime.yml"
-      - "scripts/build-mariadb-runtime.sh"
-      - "scripts/build-server-runtime.sh"
-  push:
-    branches:
-      - main
-    paths:
-      - "modules/**"
-      - "configs/**"
-      - "*.sh"
-      - "runtime/**"
-      - "patches/mariadb-10.11.9/**"
-      - ".github/workflows/mariadb-runtime.yml"
-      - ".github/workflows/server-runtime.yml"
-      - "scripts/build-mariadb-runtime.sh"
-      - "scripts/build-server-runtime.sh"
   workflow_dispatch:
   workflow_call:
 
@@ -138,7 +114,7 @@ jobs:
           path: |
             ${{ env.CORE_DIR }}
             ${{ env.BUILD_DIR }}
-          key: server-build-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.ANDROID_API }}-${{ env.ANDROID_ABI }}-${{ hashFiles('wowsp_cutoff.sh', 'scripts/build-server-runtime.sh', 'scripts/build-android-deps.sh', 'scripts/build-mariadb-runtime.sh', 'patches/mariadb-10.11.9/**', 'modules/**', 'configs/**') }}
+          key: server-build-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.ANDROID_API }}-${{ env.ANDROID_ABI }}-${{ hashFiles('wowsp_cutoff.sh', 'scripts/build-server-runtime.sh', 'scripts/build-android-deps.sh', 'scripts/build-mariadb-runtime.sh', 'patches/azerothcore-android/**', 'patches/mariadb-10.11.9/**', 'modules/**', 'configs/**') }}
           restore-keys: |
             server-build-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.ANDROID_API }}-${{ env.ANDROID_ABI }}-
 
