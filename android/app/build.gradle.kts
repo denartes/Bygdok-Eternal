@@ -121,20 +121,32 @@ tasks.register("embedNativeRuntime") {
 
         val sqlDir = File(nativeRuntimeDir, "sql")
         if (sqlDir.exists()) {
-            sqlDir.copyRecursively(assetsSqlDir, overwrite = true)
+            copyRuntimeTree(sqlDir, assetsSqlDir)
         }
 
         val mariaDbShareDir = File(databaseRuntimeDir, "share")
         if (mariaDbShareDir.exists()) {
-            mariaDbShareDir.copyRecursively(assetsMariaDbShareDir, overwrite = true)
+            copyRuntimeTree(mariaDbShareDir, assetsMariaDbShareDir)
         }
 
         val providerLibDir = File(nativeRuntimeDir, "lib")
         if (providerLibDir.exists()) {
-            providerLibDir.copyRecursively(assetsMariaDbLibDir, overwrite = true)
+            copyRuntimeTree(providerLibDir, assetsMariaDbLibDir)
         }
 
         logger.lifecycle("[embedNativeRuntime] Embedded native runtime from $nativeRuntimeDir")
+    }
+}
+
+fun copyRuntimeTree(source: File, destination: File) {
+    source.walkTopDown().forEach { sourceFile ->
+        val target = File(destination, sourceFile.relativeTo(source).path)
+        if (sourceFile.isDirectory) {
+            target.mkdirs()
+        } else {
+            target.parentFile?.mkdirs()
+            sourceFile.copyTo(target, overwrite = true)
+        }
     }
 }
 

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -136,7 +137,11 @@ private fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
                     Text("Server Log", style = MaterialTheme.typography.titleLarge)
                     TextButton(
                         onClick = {
-                            clipboardManager.setText(AnnotatedString(logLines.joinToString("\n")))
+                            val exportedLog = logLines.joinToString("\n")
+                            clipboardManager.setText(AnnotatedString(exportedLog))
+                            exportedLog.chunked(3500).forEach { chunk ->
+                                Log.i("BYGDOK_EXPORT", chunk)
+                            }
                         },
                         enabled = logLines.isNotEmpty()
                     ) {
