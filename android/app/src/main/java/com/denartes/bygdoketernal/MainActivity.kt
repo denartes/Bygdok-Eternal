@@ -27,10 +27,13 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.denartes.bygdoketernal.realm.ComponentStatus
@@ -80,6 +83,7 @@ class MainActivity : ComponentActivity() {
 private fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
     val state by RealmRuntime.state.collectAsState()
     val logLines by RealmRuntime.logLines.collectAsState()
+    val clipboardManager = LocalClipboardManager.current
 
     Column(
         modifier = Modifier
@@ -125,7 +129,20 @@ private fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Server Log", style = MaterialTheme.typography.titleLarge)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Server Log", style = MaterialTheme.typography.titleLarge)
+                    TextButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(logLines.joinToString("\n")))
+                        },
+                        enabled = logLines.isNotEmpty()
+                    ) {
+                        Text("COPY LOG")
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(logLines) { line ->

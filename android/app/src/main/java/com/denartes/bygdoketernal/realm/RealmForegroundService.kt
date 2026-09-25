@@ -95,6 +95,7 @@ class RealmForegroundService : Service() {
     }
 
     private suspend fun startDatabase() {
+        RealmRuntime.appendLog("[realm] Database phase: starting MariaDB")
         RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_DATABASE) }
         RealmRuntime.updateState { it.copy(database = ComponentStatus.STARTING) }
         updateNotification("Starting database...")
@@ -143,6 +144,7 @@ class RealmForegroundService : Service() {
         waitForTcpPort("127.0.0.1", 3306, timeoutMillis = 60_000) {
             mariadbProcess?.isAlive == true
         }
+        RealmRuntime.appendLog("[realm] Database phase: MariaDB port 3306 ready")
 
         bootstrapDatabaseSchema()
 
@@ -238,6 +240,7 @@ class RealmForegroundService : Service() {
     }
 
     private suspend fun startAuthserver() {
+        RealmRuntime.appendLog("[realm] Authserver phase: launching authserver")
         RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_AUTHSERVER) }
         RealmRuntime.updateState { it.copy(authserver = ComponentStatus.STARTING) }
         updateNotification("Starting authserver...")
@@ -261,10 +264,12 @@ class RealmForegroundService : Service() {
         monitorExit(process, "authserver") { ComponentStatus.FAILED }
 
         waitForTcpPort("127.0.0.1", 3724, 60_000) { process.isAlive }
+        RealmRuntime.appendLog("[realm] Authserver phase: port 3724 ready")
         RealmRuntime.updateState { it.copy(authserver = ComponentStatus.RUNNING) }
     }
 
     private suspend fun startWorldserver() {
+        RealmRuntime.appendLog("[realm] Worldserver phase: launching worldserver")
         RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_WORLDSERVER) }
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.STARTING) }
         updateNotification("Starting worldserver...")
@@ -290,6 +295,7 @@ class RealmForegroundService : Service() {
         monitorExit(process, "worldserver") { ComponentStatus.FAILED }
 
         waitForTcpPort("127.0.0.1", 8085, 120_000) { process.isAlive }
+        RealmRuntime.appendLog("[realm] Worldserver phase: port 8085 ready")
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.RUNNING) }
         RealmRuntime.updateState { it.copy(phase = RealmPhase.RUNNING) }
         updateNotification("Realm running")
