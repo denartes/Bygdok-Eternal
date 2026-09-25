@@ -16,12 +16,16 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
         installConfig("authserver.conf", paths.authserverConf) { line ->
             patchDirective(line, "LogsDir", paths.logsDir.absolutePath)
                 ?: patchDirective(line, "SourceDirectory", paths.sqlDir.absolutePath)
+                ?: patchDirective(line, "LoginDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_auth")
                 ?: line
         }
         installConfig("worldserver.conf", paths.worldserverConf) { line ->
             patchDirective(line, "LogsDir", paths.logsDir.absolutePath)
                 ?: patchDirective(line, "SourceDirectory", paths.sqlDir.absolutePath)
                 ?: patchDirective(line, "DataDir", paths.clientDataDir.absolutePath)
+                ?: patchDirective(line, "WorldDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_world")
+                ?: patchDirective(line, "CharacterDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_characters")
+                ?: patchDirective(line, "PlayerbotsDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_playerbots")
                 ?: line
         }
         copyAssetTreeIfPresent("modules", paths.modulesConfigDir)

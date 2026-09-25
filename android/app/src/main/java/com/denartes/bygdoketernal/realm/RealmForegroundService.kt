@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.denartes.bygdoketernal.MainActivity
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import com.denartes.bygdoketernal.realm.RealmPhase
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -19,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -41,6 +43,7 @@ class RealmForegroundService : Service() {
     private var authserverProcess: Process? = null
     private var worldserverProcess: Process? = null
     private var intentionalStop = false
+    private var logTailJob: Job? = null
 
     private lateinit var paths: RealmPaths
 
@@ -74,7 +77,9 @@ class RealmForegroundService : Service() {
     private suspend fun startRealm() {
         try {
             paths.ensureDirectories()
+            clearNativeLogs()
             RealmConfigInstaller(this, paths).install()
+            startNativeLogTail()
 
             startDatabase()
             startAuthserver()
@@ -139,9 +144,7 @@ class RealmForegroundService : Service() {
             mariadbProcess?.isAlive == true
         }
 
-        if (firstRun) {
-            bootstrapDatabaseSchema()
-        }
+        bootstrapDatabaseSchema()
 
         RealmRuntime.updateState { it.copy(database = ComponentStatus.RUNNING) }
     }
@@ -176,12 +179,49 @@ class RealmForegroundService : Service() {
         RealmRuntime.appendLog("[realm] Creating acore user and databases")
         val bootstrapSql = """
             DROP USER IF EXISTS 'acore'@'%';
+            DROP USER IF EXISTS 'acore'@'localhost';
+            DROP USER IF EXISTS 'acore'@'127.0.0.1';
             CREATE USER 'acore'@'%' IDENTIFIED BY 'acore';
+            CREATE USER 'acore'@'localhost' IDENTIFIED BY 'acore';
+            CREATE USER 'acore'@'127.0.0.1' IDENTIFIED BY 'acore';
             GRANT ALL PRIVILEGES ON *.* TO 'acore'@'%';
+            GRANT ALL PRIVILEGES ON *.* TO 'acore'@'localhost';
+            GRANT ALL PRIVILEGES ON *.* TO 'acore'@'127.0.0.1';
             CREATE DATABASE IF NOT EXISTS acore_auth;
             CREATE DATABASE IF NOT EXISTS acore_world;
             CREATE DATABASE IF NOT EXISTS acore_characters;
             CREATE DATABASE IF NOT EXISTS acore_playerbots;
+            USE acore_auth;
+            CREATE TABLE IF NOT EXISTS realmlist (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                name VARCHAR(32) NOT NULL DEFAULT '',
+                address VARCHAR(255) NOT NULL DEFAULT '127.0.0.1',
+                localAddress VARCHAR(255) NOT NULL DEFAULT '127.0.0.1',
+                localSubnetMask VARCHAR(255) NOT NULL DEFAULT '255.255.255.0',
+                port SMALLINT UNSIGNED NOT NULL DEFAULT 8085,
+                icon TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                flag TINYINT UNSIGNED NOT NULL DEFAULT 2,
+                timezone TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                allowedSecurityLevel TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                population FLOAT NOT NULL DEFAULT 0,
+                gamebuild INT UNSIGNED NOT NULL DEFAULT 12340,
+                PRIMARY KEY (id), UNIQUE KEY idx_name (name)
+            ) ENGINE=InnoDB;
+            INSERT INTO realmlist (id, name, address, localAddress, localSubnetMask, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild)
+            VALUES (1, 'AzerothCore', '127.0.0.1', '127.0.0.1', '255.255.255.0', 8085, 0, 2, 1, 0, 0, 12340)
+            ON DUPLICATE KEY UPDATE address=VALUES(address), port=VALUES(port), gamebuild=VALUES(gamebuild);
+            CREATE TABLE IF NOT EXISTS build_info (
+                majorVersion INT UNSIGNED NOT NULL,
+                minorVersion INT UNSIGNED NOT NULL,
+                bugfixVersion INT UNSIGNED NOT NULL,
+                hotfixVersion VARCHAR(5) NOT NULL DEFAULT '',
+                build INT UNSIGNED NOT NULL PRIMARY KEY,
+                winChecksumSeed BINARY(16) NOT NULL,
+                macChecksumSeed BINARY(16) NOT NULL
+            ) ENGINE=InnoDB;
+            INSERT INTO build_info (majorVersion, minorVersion, bugfixVersion, hotfixVersion, build, winChecksumSeed, macChecksumSeed)
+            VALUES (3, 3, 5, '', 12340, UNHEX('00000000000000000000000000000000'), UNHEX('00000000000000000000000000000000'))
+            ON DUPLICATE KEY UPDATE majorVersion=VALUES(majorVersion), minorVersion=VALUES(minorVersion), bugfixVersion=VALUES(bugfixVersion);
             FLUSH PRIVILEGES;
         """.trimIndent()
         runBlockingProcess(
@@ -256,6 +296,8 @@ class RealmForegroundService : Service() {
     }
 
     private fun stopRealm(resetState: Boolean = true) {
+        logTailJob?.cancel()
+        logTailJob = null
         worldserverProcess?.destroyForcibly()
         authserverProcess?.destroyForcibly()
         mariadbProcess?.destroyForcibly()
@@ -305,6 +347,47 @@ class RealmForegroundService : Service() {
                 // Process pipes can close while the service is stopping.
             }
         }
+    }
+
+    private fun startNativeLogTail() {
+        logTailJob?.cancel()
+        logTailJob = scope.launch {
+            val files = listOf(
+                "Auth.log" to "authserver-file",
+                "Server.log" to "worldserver-file",
+                "Errors.log" to "errors-file",
+                "Playerbots.log" to "playerbots-file"
+            )
+            val positions = files.associate { (name, _) ->
+                name to 0L
+            }.toMutableMap()
+            while (isActive) {
+                for ((name, tag) in files) {
+                    val file = File(paths.logsDir, name)
+                    if (!file.isFile) continue
+                    RandomAccessFile(file, "r").use { reader ->
+                        val position = positions[name] ?: 0L
+                        if (file.length() < position) {
+                            positions[name] = 0L
+                            reader.seek(0)
+                        } else {
+                            reader.seek(position)
+                        }
+                        var line = reader.readLine()
+                        while (line != null) {
+                            RealmRuntime.appendLog("[$tag] $line")
+                            line = reader.readLine()
+                        }
+                        positions[name] = reader.filePointer
+                    }
+                }
+                kotlinx.coroutines.delay(250)
+            }
+        }
+    }
+
+    private fun clearNativeLogs() {
+        paths.logsDir.listFiles()?.forEach { it.delete() }
     }
 
     private fun monitorExit(process: Process, tag: String, onExit: () -> ComponentStatus) {
