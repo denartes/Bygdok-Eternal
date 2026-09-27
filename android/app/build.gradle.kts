@@ -152,6 +152,13 @@ tasks.register("embedNativeRuntime") {
         val sqlDir = File(nativeRuntimeDir, "sql")
         if (sqlDir.exists()) {
             copyRuntimeTree(sqlDir, assetsSqlDir)
+
+            val legacyPlayerbotsSqlDir = File(assetsSqlDir, "modules/mod-playerbots/sql")
+            val playerbotsSqlDir = File(assetsSqlDir, "modules/mod-playerbots/data/sql")
+            if (File(legacyPlayerbotsSqlDir, "playerbots/base").isDirectory && !playerbotsSqlDir.exists()) {
+                legacyPlayerbotsSqlDir.copyRecursively(playerbotsSqlDir, overwrite = true)
+                legacyPlayerbotsSqlDir.deleteRecursively()
+            }
         }
 
         val mariaDbShareDir = File(databaseRuntimeDir, "share")

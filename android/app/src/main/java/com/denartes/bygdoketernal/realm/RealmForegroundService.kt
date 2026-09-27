@@ -187,6 +187,7 @@ class RealmForegroundService : Service() {
         if (!shouldImportDatabaseSchema(markerExists, existingCoreSchema)) {
             if (!markerExists) schemaMarker.writeText("existing schema detected\n")
             RealmRuntime.appendLog("[realm] Base database schema already initialized; skipping import")
+            bootstrapModuleDatabaseSchemas(clientBinary)
             return
         }
 
@@ -244,6 +245,59 @@ class RealmForegroundService : Service() {
             }
         }
         schemaMarker.writeText("complete\n")
+        bootstrapModuleDatabaseSchemas(clientBinary)
+    }
+
+    private fun bootstrapModuleDatabaseSchemas(clientBinary: File) {
+        for (batch in realmModuleDatabaseBootstrapFiles(File(paths.sqlDir, "modules"))) {
+            val marker = File(paths.dataDir, ".module-base-${batch.moduleName}-${batch.database}.complete")
+            if (marker.isFile) continue
+            if (batch.moduleName == "mod-playerbots" &&
+                databaseTableExists(clientBinary, batch.database, "playerbots_account_keys")
+            ) {
+                RealmRuntime.appendLog("[db-module:${batch.database}] Base schema already populated; skipping import")
+                marker.writeText("existing schema detected\n")
+                continue
+            }
+
+            for (sqlFile in batch.sqlFiles) {
+                if (sqlFile.length() == 0L) continue
+                RealmRuntime.appendLog("[db-module:${batch.database}] Importing ${sqlFile.name}")
+                runBlockingProcessFromFile(
+                    listOf(
+                        clientBinary.absolutePath,
+                        "--no-defaults",
+                        "-h", "127.0.0.1",
+                        "-P", "3306",
+                        "-u", "root",
+                        "--database", batch.database
+                    ),
+                    logPrefix = "db-module:${batch.database}",
+                    inputFile = sqlFile
+                )
+            }
+            marker.writeText("complete\n")
+        }
+    }
+
+    private fun databaseTableExists(clientBinary: File, database: String, table: String): Boolean {
+        val query = "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '$database' AND table_name = '$table');"
+        val process = ProcessBuilder(
+            clientBinary.absolutePath,
+            "--no-defaults",
+            "-h", "127.0.0.1",
+            "-P", "3306",
+            "-u", "root",
+            "--batch",
+            "--skip-column-names",
+            "-e", query
+        )
+            .directory(paths.root)
+            .redirectErrorStream(true)
+            .also { configureMysqlEnvironment(it) }
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        return process.waitFor() == 0 && output.lineSequence().any { it.trim() == "1" }
     }
 
     private fun hasCoreDatabaseSchema(clientBinary: File): Boolean {
@@ -359,27 +413,6 @@ class RealmForegroundService : Service() {
     private fun nativeBinary(name: String): String =
         RealmExecutableBinary.nativeLibraryPath(paths.nativeLibraryDir, name)
 
-    private fun realmDatabaseBootstrapFiles(baseDir: File): Map<String, List<File>> {
-        if (!baseDir.isDirectory) return emptyMap()
-        val databaseNameMap = mapOf(
-            "db_auth" to "acore_auth",
-            "db_characters" to "acore_characters",
-            "db_world" to "acore_world"
-        )
-        val filesByDb = linkedMapOf<String, MutableList<File>>()
-        baseDir.listFiles()?.forEach { databaseDir ->
-            if (!databaseDir.isDirectory) return@forEach
-            val sqlFiles = databaseDir.listFiles { file -> file.isFile && file.extension == "sql" }
-                ?.sortedBy { it.name }
-                ?.toMutableList() ?: mutableListOf()
-            if (sqlFiles.isNotEmpty()) {
-                val runtimeDatabaseName = databaseNameMap[databaseDir.name] ?: databaseDir.name
-                filesByDb[runtimeDatabaseName] = sqlFiles
-            }
-        }
-        return filesByDb
-    }
-
     private fun installDatabaseLibraryLinks() {
         val manifest = JSONObject(File(paths.mariadbBaseDir, "runtime-manifest.json").readText())
         val links = manifest.getJSONArray("links")
@@ -393,6 +426,27 @@ class RealmForegroundService : Service() {
             check(target.isFile) { "Missing database runtime library: $logicalName" }
             check(target.isFile) { "Missing database runtime library: $logicalName" }
         }
+    }
+
+    private fun realmDatabaseBootstrapFiles(baseDir: File): Map<String, List<File>> {
+        if (!baseDir.isDirectory) return emptyMap()
+        val databaseNameMap = mapOf(
+            "db_auth" to "acore_auth",
+            "db_characters" to "acore_characters",
+            "db_world" to "acore_world"
+        )
+        val filesByDb = linkedMapOf<String, MutableList<File>>()
+        baseDir.listFiles()?.forEach { databaseDir ->
+            if (!databaseDir.isDirectory) return@forEach
+            val sqlFiles = databaseDir.listFiles { file -> file.isFile && file.extension == "sql" }
+                ?.sortedBy { it.name }
+                ?: return@forEach
+            if (sqlFiles.isNotEmpty()) {
+                val runtimeDatabaseName = databaseNameMap[databaseDir.name] ?: databaseDir.name
+                filesByDb[runtimeDatabaseName] = sqlFiles.toMutableList()
+            }
+        }
+        return filesByDb
     }
 
     private fun databaseLibraryPath(): String =
@@ -579,5 +633,50 @@ class RealmForegroundService : Service() {
 
         internal fun shouldImportDatabaseSchema(markerExists: Boolean, coreSchemaExists: Boolean): Boolean =
             !markerExists && !coreSchemaExists
+    }
+}
+
+internal data class RealmModuleDatabaseBootstrapBatch(
+    val moduleName: String,
+    val database: String,
+    val sqlFiles: List<File>
+)
+
+internal fun realmModuleDatabaseBootstrapFiles(modulesDir: File): List<RealmModuleDatabaseBootstrapBatch> {
+    if (!modulesDir.isDirectory) return emptyList()
+    val databaseNameMap = mapOf(
+        "auth" to "acore_auth",
+        "db-auth" to "acore_auth",
+        "db_auth" to "acore_auth",
+        "characters" to "acore_characters",
+        "db-characters" to "acore_characters",
+        "db_characters" to "acore_characters",
+        "world" to "acore_world",
+        "db-world" to "acore_world",
+        "db_world" to "acore_world",
+        "playerbots" to "acore_playerbots",
+        "db-playerbots" to "acore_playerbots",
+        "db_playerbots" to "acore_playerbots"
+    )
+    val batches = linkedMapOf<Pair<String, String>, MutableList<File>>()
+
+    modulesDir.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.forEach { moduleDir ->
+        for (sqlRootName in listOf("data/sql", "sql")) {
+            val sqlRoot = File(moduleDir, sqlRootName)
+            sqlRoot.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.forEach { databaseDir ->
+                val database = databaseNameMap[databaseDir.name] ?: return@forEach
+                val baseDir = File(databaseDir, "base")
+                val files = baseDir.listFiles { file -> file.isFile && file.extension == "sql" }
+                    ?.sortedBy { it.name }
+                    ?: return@forEach
+                if (files.isNotEmpty()) {
+                    batches.getOrPut(moduleDir.name to database) { mutableListOf() }.addAll(files)
+                }
+            }
+        }
+    }
+
+    return batches.map { (key, files) ->
+        RealmModuleDatabaseBootstrapBatch(key.first, key.second, files.distinct().sortedBy { it.absolutePath })
     }
 }

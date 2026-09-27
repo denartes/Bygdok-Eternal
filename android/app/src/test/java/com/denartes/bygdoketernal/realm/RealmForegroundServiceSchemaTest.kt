@@ -8,6 +8,29 @@ import java.io.File
 
 class RealmForegroundServiceSchemaTest {
     @Test
+    fun `module base sql supports data and legacy module layouts`() {
+        val modulesDir = File.createTempFile("module-sql", "")
+        modulesDir.delete()
+        modulesDir.mkdirs()
+        try {
+            val worldSql = File(modulesDir, "mod-individual-progression/sql/world/base/quest_xp_table.sql")
+            val playerbotsSql = File(modulesDir, "mod-playerbots/data/sql/playerbots/base/playerbots.sql")
+            worldSql.parentFile?.mkdirs()
+            playerbotsSql.parentFile?.mkdirs()
+            worldSql.writeText("CREATE TABLE custom_quest_xp (entry INT);\n")
+            playerbotsSql.writeText("CREATE TABLE playerbots (id INT);\n")
+
+            val batches = realmModuleDatabaseBootstrapFiles(modulesDir)
+
+            assertEquals(2, batches.size)
+            assertTrue(batches.any { it.moduleName == "mod-individual-progression" && it.database == "acore_world" })
+            assertTrue(batches.any { it.moduleName == "mod-playerbots" && it.database == "acore_playerbots" })
+        } finally {
+            modulesDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `base schema import only runs when neither marker nor core schema exists`() {
         assertTrue(RealmForegroundService.shouldImportDatabaseSchema(markerExists = false, coreSchemaExists = false))
         assertFalse(RealmForegroundService.shouldImportDatabaseSchema(markerExists = true, coreSchemaExists = false))

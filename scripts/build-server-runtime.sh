@@ -201,11 +201,16 @@ fi
 for module_dir in "$CORE_DIR"/modules/*; do
     test -d "$module_dir" || continue
     module_name="$(basename "$module_dir")"
-    for sql_dir in "$module_dir/data/sql" "$module_dir/sql"; do
-        test -d "$sql_dir" || continue
-        mkdir -p "$OUTPUT_DIR/sql/modules/$module_name"
-        cp -R "$sql_dir" "$OUTPUT_DIR/sql/modules/$module_name/"
-    done
+    data_sql_dir="$module_dir/data/sql"
+    if [ -d "$data_sql_dir" ]; then
+        mkdir -p "$OUTPUT_DIR/sql/modules/$module_name/data"
+        cp -R "$data_sql_dir" "$OUTPUT_DIR/sql/modules/$module_name/data/"
+    fi
+    legacy_sql_dir="$module_dir/sql"
+    if [ -d "$legacy_sql_dir" ]; then
+        mkdir -p "$OUTPUT_DIR/sql/modules/$module_name/sql"
+        cp -R "$legacy_sql_dir/." "$OUTPUT_DIR/sql/modules/$module_name/sql/"
+    fi
 done
 
 for binary in "$OUTPUT_DIR/bin/authserver" "$OUTPUT_DIR/bin/worldserver" "$OUTPUT_DIR/bin/mariadbd"; do
