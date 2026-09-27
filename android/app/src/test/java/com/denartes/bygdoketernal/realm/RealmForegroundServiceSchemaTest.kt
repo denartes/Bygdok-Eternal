@@ -15,16 +15,20 @@ class RealmForegroundServiceSchemaTest {
         try {
             val worldSql = File(modulesDir, "mod-individual-progression/sql/world/base/quest_xp_table.sql")
             val playerbotsSql = File(modulesDir, "mod-playerbots/data/sql/playerbots/base/playerbots.sql")
+            val transmogSql = File(modulesDir, "mod-transmog-plus/sql/characters/mod_transmog_plus_characters.sql")
             worldSql.parentFile?.mkdirs()
             playerbotsSql.parentFile?.mkdirs()
+            transmogSql.parentFile?.mkdirs()
             worldSql.writeText("CREATE TABLE custom_quest_xp (entry INT);\n")
             playerbotsSql.writeText("CREATE TABLE playerbots (id INT);\n")
+            transmogSql.writeText("CREATE TABLE mod_transmog_plus_appearances (id INT);\n")
 
             val batches = realmModuleDatabaseBootstrapFiles(modulesDir)
 
-            assertEquals(2, batches.size)
+            assertEquals(3, batches.size)
             assertTrue(batches.any { it.moduleName == "mod-individual-progression" && it.database == "acore_world" })
             assertTrue(batches.any { it.moduleName == "mod-playerbots" && it.database == "acore_playerbots" })
+            assertTrue(batches.any { it.moduleName == "mod-transmog-plus" && it.database == "acore_characters" })
         } finally {
             modulesDir.deleteRecursively()
         }
@@ -35,6 +39,13 @@ class RealmForegroundServiceSchemaTest {
         assertTrue(RealmForegroundService.shouldImportDatabaseSchema(markerExists = false, coreSchemaExists = false))
         assertFalse(RealmForegroundService.shouldImportDatabaseSchema(markerExists = true, coreSchemaExists = false))
         assertFalse(RealmForegroundService.shouldImportDatabaseSchema(markerExists = false, coreSchemaExists = true))
+    }
+
+    @Test
+    fun `module schema marker is trusted only when required table exists`() {
+        assertTrue(RealmForegroundService.shouldSkipModuleDatabaseBootstrap(markerExists = true, requiredTableExists = true))
+        assertFalse(RealmForegroundService.shouldSkipModuleDatabaseBootstrap(markerExists = true, requiredTableExists = false))
+        assertFalse(RealmForegroundService.shouldSkipModuleDatabaseBootstrap(markerExists = false, requiredTableExists = true))
     }
 
     @Test

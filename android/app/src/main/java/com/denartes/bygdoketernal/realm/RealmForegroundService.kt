@@ -251,7 +251,9 @@ class RealmForegroundService : Service() {
     private fun bootstrapModuleDatabaseSchemas(clientBinary: File) {
         for (batch in realmModuleDatabaseBootstrapFiles(File(paths.sqlDir, "modules"))) {
             val marker = File(paths.dataDir, ".module-base-${batch.moduleName}-${batch.database}.complete")
-            if (marker.isFile) continue
+            val transmogSchemaReady = batch.moduleName != "mod-transmog-plus" ||
+                databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")
+            if (shouldSkipModuleDatabaseBootstrap(marker.isFile, transmogSchemaReady)) continue
             if (batch.moduleName == "mod-playerbots" &&
                 databaseTableExists(clientBinary, batch.database, "playerbots_account_keys")
             ) {
@@ -277,6 +279,11 @@ class RealmForegroundService : Service() {
                 )
             }
             marker.writeText("complete\n")
+            if (batch.moduleName == "mod-transmog-plus") {
+                check(databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")) {
+                    "Transmog Plus base SQL did not create mod_transmog_plus_appearances"
+                }
+            }
         }
     }
 
@@ -633,6 +640,9 @@ class RealmForegroundService : Service() {
 
         internal fun shouldImportDatabaseSchema(markerExists: Boolean, coreSchemaExists: Boolean): Boolean =
             !markerExists && !coreSchemaExists
+
+        internal fun shouldSkipModuleDatabaseBootstrap(markerExists: Boolean, requiredTableExists: Boolean): Boolean =
+            markerExists && requiredTableExists
     }
 }
 
@@ -666,7 +676,8 @@ internal fun realmModuleDatabaseBootstrapFiles(modulesDir: File): List<RealmModu
             sqlRoot.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.forEach { databaseDir ->
                 val database = databaseNameMap[databaseDir.name] ?: return@forEach
                 val baseDir = File(databaseDir, "base")
-                val files = baseDir.listFiles { file -> file.isFile && file.extension == "sql" }
+                val sqlDir = if (baseDir.isDirectory) baseDir else databaseDir
+                val files = sqlDir.listFiles { file -> file.isFile && file.extension == "sql" }
                     ?.sortedBy { it.name }
                     ?: return@forEach
                 if (files.isNotEmpty()) {
