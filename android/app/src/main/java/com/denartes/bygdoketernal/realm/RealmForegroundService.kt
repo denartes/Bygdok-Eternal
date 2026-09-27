@@ -251,7 +251,8 @@ class RealmForegroundService : Service() {
     private fun bootstrapModuleDatabaseSchemas(clientBinary: File) {
         for (batch in realmModuleDatabaseBootstrapFiles(File(paths.sqlDir, "modules"))) {
             val marker = File(paths.dataDir, ".module-base-${batch.moduleName}-${batch.database}.complete")
-            val transmogSchemaReady = batch.moduleName != "mod-transmog-plus" ||
+            val validatesTransmogSchema = requiresTransmogSchemaTableCheck(batch.moduleName, batch.database)
+            val transmogSchemaReady = !validatesTransmogSchema ||
                 databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")
             if (shouldSkipModuleDatabaseBootstrap(marker.isFile, transmogSchemaReady)) continue
             if (batch.moduleName == "mod-playerbots" &&
@@ -279,7 +280,7 @@ class RealmForegroundService : Service() {
                 )
             }
             marker.writeText("complete\n")
-            if (batch.moduleName == "mod-transmog-plus") {
+            if (validatesTransmogSchema) {
                 check(databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")) {
                     "Transmog Plus base SQL did not create mod_transmog_plus_appearances"
                 }
@@ -463,6 +464,7 @@ class RealmForegroundService : Service() {
         val socketPath = paths.socketFile.absolutePath
         val env = builder.environment()
         env["LD_LIBRARY_PATH"] = databaseLibraryPath()
+        env["OPENSSL_MODULES"] = paths.nativeLibraryDir
         env["MYSQL_UNIX_PORT"] = socketPath
         env["MYSQL_UNIX_ADDR"] = socketPath
         env["MARIADB_UNIX_PORT"] = socketPath
@@ -643,6 +645,9 @@ class RealmForegroundService : Service() {
 
         internal fun shouldSkipModuleDatabaseBootstrap(markerExists: Boolean, requiredTableExists: Boolean): Boolean =
             markerExists && requiredTableExists
+
+        internal fun requiresTransmogSchemaTableCheck(moduleName: String, database: String): Boolean =
+            moduleName == "mod-transmog-plus" && database == "acore_characters"
     }
 }
 

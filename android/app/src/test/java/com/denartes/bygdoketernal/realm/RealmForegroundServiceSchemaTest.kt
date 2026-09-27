@@ -49,6 +49,13 @@ class RealmForegroundServiceSchemaTest {
     }
 
     @Test
+    fun `transmog table validation only targets characters database`() {
+        assertTrue(RealmForegroundService.requiresTransmogSchemaTableCheck("mod-transmog-plus", "acore_characters"))
+        assertFalse(RealmForegroundService.requiresTransmogSchemaTableCheck("mod-transmog-plus", "acore_world"))
+        assertFalse(RealmForegroundService.requiresTransmogSchemaTableCheck("mod-individual-progression", "acore_world"))
+    }
+
+    @Test
     fun `database bootstrap mapping keeps runtime database names aligned`() {
         val baseDir = File.createTempFile("sql-base", "")
         baseDir.delete()

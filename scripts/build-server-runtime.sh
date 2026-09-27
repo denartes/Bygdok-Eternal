@@ -31,6 +31,7 @@ for required in \
     "$ANDROID_MYSQL_ROOT/../lib/libmariadb.so" \
     "$ANDROID_MYSQL_ROOT/../lib/libssl.so" \
     "$ANDROID_MYSQL_ROOT/../lib/libcrypto.so" \
+    "$ANDROID_MYSQL_ROOT/../lib/ossl-modules/legacy.so" \
     "$ANDROID_MYSQL_ROOT/../lib/libreadline.so" \
     "$ANDROID_MYSQL_ROOT/../lib/libncurses.so" \
     "$ANDROID_RUNTIME_LIB_DIR"; do
@@ -171,6 +172,7 @@ cp "$MARIADB_RUNTIME_DIR/bin/mariadb" "$OUTPUT_DIR/bin/mariadb_client"
 chmod +x "$OUTPUT_DIR/bin/mariadbd" "$OUTPUT_DIR/bin/mariadb_client"
 cp -a "$MARIADB_RUNTIME_DIR/lib/." "$OUTPUT_DIR/lib/"
 cp -a "$MARIADB_RUNTIME_DIR/share/." "$OUTPUT_DIR/share/"
+cp "$ANDROID_MYSQL_ROOT/../lib/ossl-modules/legacy.so" "$OUTPUT_DIR/lib/legacy.so"
 
 # The packaged Pocket Realm provider uses APK-safe dependency filenames. Keep
 # canonical SONAME copies in the combined runtime so AzerothCore's ELF
