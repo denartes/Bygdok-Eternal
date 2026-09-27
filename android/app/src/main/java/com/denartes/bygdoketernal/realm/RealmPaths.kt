@@ -9,6 +9,7 @@ class RealmPaths(context: Context) {
     val dataDir: File = File(root, "data")
     val clientDataDir: File = File(root, "client-data")
     val etcDir: File = File(root, "etc")
+    val binDir: File = File(root, "bin")
     val modulesConfigDir: File = File(etcDir, "modules")
     val logsDir: File = File(root, "logs")
     val sqlDir: File = File(root, "sql")
@@ -23,7 +24,7 @@ class RealmPaths(context: Context) {
     val nativeLibraryDir: String = context.applicationInfo.nativeLibraryDir
 
     fun ensureDirectories() {
-        for (dir in listOf(root, dataDir, clientDataDir, etcDir, modulesConfigDir, logsDir, sqlDir, mariadbBaseDir, mariadbLibDir)) {
+        for (dir in listOf(root, dataDir, clientDataDir, etcDir, binDir, modulesConfigDir, logsDir, sqlDir, mariadbBaseDir, mariadbLibDir)) {
             dir.mkdirs()
         }
     }

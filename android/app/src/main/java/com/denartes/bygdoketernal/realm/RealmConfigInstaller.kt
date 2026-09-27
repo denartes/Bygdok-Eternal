@@ -13,27 +13,35 @@ import java.io.File
 class RealmConfigInstaller(private val context: Context, private val paths: RealmPaths) {
 
     fun install() {
+        val bundledMysqlClient = installMysqlClientExecutable()
         installConfig("authserver.conf", paths.authserverConf) { line ->
             patchDirective(line, "LogsDir", paths.logsDir.absolutePath)
                 ?: patchDirective(line, "SourceDirectory", paths.sqlDir.absolutePath)
+                ?: patchDirective(line, "MySQLExecutable", bundledMysqlClient.absolutePath)
                 ?: patchDirective(line, "LoginDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_auth")
                 ?: line
         }
         installConfig("worldserver.conf", paths.worldserverConf) { line ->
             patchDirective(line, "LogsDir", paths.logsDir.absolutePath)
                 ?: patchDirective(line, "SourceDirectory", paths.sqlDir.absolutePath)
+                ?: patchDirective(line, "MySQLExecutable", bundledMysqlClient.absolutePath)
                 ?: patchDirective(line, "DataDir", paths.clientDataDir.absolutePath)
                 ?: patchDirective(line, "WorldDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_world")
                 ?: patchDirective(line, "CharacterDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_characters")
                 ?: patchDirective(line, "PlayerbotsDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_playerbots")
                 ?: line
         }
+        File(paths.etcDir, "my.cnf").writeText("[mysqld]\nversion=8.0.36\n")
         copyAssetTreeIfPresent("modules", paths.modulesConfigDir)
         copyAssetTreeIfPresent("sql", paths.sqlDir)
         copyAssetTreeIfPresent("mariadb-share", paths.mariadbBaseDir)
         paths.mariadbLibDir.deleteRecursively()
         paths.mariadbLibDir.mkdirs()
         copyAssetTreeIfPresent("mariadb-libs", paths.mariadbLibDir)
+    }
+
+    private fun installMysqlClientExecutable(): File {
+        return File(paths.nativeLibraryDir, "libpocket_mariadb_client.so")
     }
 
     private fun installConfig(assetName: String, destination: File, patchLine: (String) -> String) {

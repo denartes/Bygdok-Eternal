@@ -122,9 +122,10 @@ class RealmForegroundService : Service() {
             }
         }
 
+        val myCnf = File(paths.etcDir, "my.cnf")
         val process = ProcessBuilder(
             nativeBinary("libpocket_mariadbd.so"),
-            "--no-defaults",
+            "--defaults-file=${myCnf.absolutePath}",
             "--datadir=${paths.dataDir.absolutePath}",
             "--basedir=${basedir.absolutePath}",
             "--socket=${paths.socketFile.absolutePath}",
@@ -135,7 +136,7 @@ class RealmForegroundService : Service() {
         )
             .directory(paths.root)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
+            .also { configureMysqlEnvironment(it) }
             .start()
         mariadbProcess = process
         streamOutput(process, "mariadbd")
@@ -154,10 +155,11 @@ class RealmForegroundService : Service() {
     private fun initializeDatabase(basedir: File) {
         val shareDir = File(basedir, "share")
         val bootstrapSql = File(basedir, "bootstrap.sql").readText()
+        val myCnf = File(paths.etcDir, "my.cnf")
         runBlockingProcess(
             listOf(
                 nativeBinary("libpocket_mariadbd.so"),
-                "--no-defaults",
+                "--defaults-file=${myCnf.absolutePath}",
                 "--bootstrap",
                 "--silent-startup",
                 "--basedir=${basedir.absolutePath}",
@@ -178,6 +180,16 @@ class RealmForegroundService : Service() {
             RealmRuntime.appendLog("[realm] No embedded SQL client; skipping automatic user/database creation")
             return
         }
+
+        val schemaMarker = File(paths.dataDir, ".acore-schema-bootstrap-complete")
+        val markerExists = schemaMarker.isFile
+        val existingCoreSchema = !markerExists && hasCoreDatabaseSchema(clientBinary)
+        if (!shouldImportDatabaseSchema(markerExists, existingCoreSchema)) {
+            if (!markerExists) schemaMarker.writeText("existing schema detected\n")
+            RealmRuntime.appendLog("[realm] Base database schema already initialized; skipping import")
+            return
+        }
+
         RealmRuntime.appendLog("[realm] Creating acore user and databases")
         val bootstrapSql = """
             DROP USER IF EXISTS 'acore'@'%';
@@ -193,37 +205,6 @@ class RealmForegroundService : Service() {
             CREATE DATABASE IF NOT EXISTS acore_world;
             CREATE DATABASE IF NOT EXISTS acore_characters;
             CREATE DATABASE IF NOT EXISTS acore_playerbots;
-            USE acore_auth;
-            CREATE TABLE IF NOT EXISTS realmlist (
-                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-                name VARCHAR(32) NOT NULL DEFAULT '',
-                address VARCHAR(255) NOT NULL DEFAULT '127.0.0.1',
-                localAddress VARCHAR(255) NOT NULL DEFAULT '127.0.0.1',
-                localSubnetMask VARCHAR(255) NOT NULL DEFAULT '255.255.255.0',
-                port SMALLINT UNSIGNED NOT NULL DEFAULT 8085,
-                icon TINYINT UNSIGNED NOT NULL DEFAULT 0,
-                flag TINYINT UNSIGNED NOT NULL DEFAULT 2,
-                timezone TINYINT UNSIGNED NOT NULL DEFAULT 0,
-                allowedSecurityLevel TINYINT UNSIGNED NOT NULL DEFAULT 0,
-                population FLOAT NOT NULL DEFAULT 0,
-                gamebuild INT UNSIGNED NOT NULL DEFAULT 12340,
-                PRIMARY KEY (id), UNIQUE KEY idx_name (name)
-            ) ENGINE=InnoDB;
-            INSERT INTO realmlist (id, name, address, localAddress, localSubnetMask, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild)
-            VALUES (1, 'AzerothCore', '127.0.0.1', '127.0.0.1', '255.255.255.0', 8085, 0, 2, 1, 0, 0, 12340)
-            ON DUPLICATE KEY UPDATE address=VALUES(address), port=VALUES(port), gamebuild=VALUES(gamebuild);
-            CREATE TABLE IF NOT EXISTS build_info (
-                majorVersion INT UNSIGNED NOT NULL,
-                minorVersion INT UNSIGNED NOT NULL,
-                bugfixVersion INT UNSIGNED NOT NULL,
-                hotfixVersion VARCHAR(5) NOT NULL DEFAULT '',
-                build INT UNSIGNED NOT NULL PRIMARY KEY,
-                winChecksumSeed BINARY(16) NOT NULL,
-                macChecksumSeed BINARY(16) NOT NULL
-            ) ENGINE=InnoDB;
-            INSERT INTO build_info (majorVersion, minorVersion, bugfixVersion, hotfixVersion, build, winChecksumSeed, macChecksumSeed)
-            VALUES (3, 3, 5, '', 12340, UNHEX('00000000000000000000000000000000'), UNHEX('00000000000000000000000000000000'))
-            ON DUPLICATE KEY UPDATE majorVersion=VALUES(majorVersion), minorVersion=VALUES(minorVersion), bugfixVersion=VALUES(bugfixVersion);
             FLUSH PRIVILEGES;
         """.trimIndent()
         runBlockingProcess(
@@ -237,6 +218,58 @@ class RealmForegroundService : Service() {
             ),
             logPrefix = "db-bootstrap"
         )
+
+        val schemaBases = realmDatabaseBootstrapFiles(File(paths.sqlDir, "data/sql/base"))
+        if (schemaBases.isEmpty()) {
+            RealmRuntime.appendLog("[realm] No bundled base schema files were found; authserver will not have tables ready")
+            return
+        }
+
+        for ((database, sqlFiles) in schemaBases) {
+            for (sqlFile in sqlFiles) {
+                if (!sqlFile.isFile || sqlFile.length() == 0L) continue
+                RealmRuntime.appendLog("[db-schema:$database] Importing ${sqlFile.name}")
+                runBlockingProcessFromFile(
+                    listOf(
+                        clientBinary.absolutePath,
+                        "--no-defaults",
+                        "-h", "127.0.0.1",
+                        "-P", "3306",
+                        "-u", "root",
+                        "--database", database
+                    ),
+                    logPrefix = "db-schema:$database",
+                    inputFile = sqlFile
+                )
+            }
+        }
+        schemaMarker.writeText("complete\n")
+    }
+
+    private fun hasCoreDatabaseSchema(clientBinary: File): Boolean {
+        val query = """
+            SELECT CASE WHEN
+                EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'acore_auth' AND table_name = 'account')
+                AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'acore_characters' AND table_name = 'characters')
+                AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'acore_world' AND table_name = 'creature_template')
+            THEN 'complete' ELSE 'missing' END;
+        """.trimIndent()
+        val process = ProcessBuilder(
+            clientBinary.absolutePath,
+            "--no-defaults",
+            "-h", "127.0.0.1",
+            "-P", "3306",
+            "-u", "root",
+            "--batch",
+            "--skip-column-names",
+            "-e", query
+        )
+            .directory(paths.root)
+            .redirectErrorStream(true)
+            .also { configureMysqlEnvironment(it) }
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        return process.waitFor() == 0 && output.lineSequence().any { it.trim() == "complete" }
     }
 
     private suspend fun startAuthserver() {
@@ -257,7 +290,7 @@ class RealmForegroundService : Service() {
         )
             .directory(paths.etcDir)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
+            .also { configureMysqlEnvironment(it) }
             .start()
         authserverProcess = process
         streamOutput(process, "authserver")
@@ -288,7 +321,7 @@ class RealmForegroundService : Service() {
         )
             .directory(paths.etcDir)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
+            .also { configureMysqlEnvironment(it) }
             .start()
         worldserverProcess = process
         streamOutput(process, "worldserver")
@@ -323,7 +356,29 @@ class RealmForegroundService : Service() {
         stopSelf()
     }
 
-    private fun nativeBinary(name: String): String = File(paths.nativeLibraryDir, name).absolutePath
+    private fun nativeBinary(name: String): String =
+        RealmExecutableBinary.nativeLibraryPath(paths.nativeLibraryDir, name)
+
+    private fun realmDatabaseBootstrapFiles(baseDir: File): Map<String, List<File>> {
+        if (!baseDir.isDirectory) return emptyMap()
+        val databaseNameMap = mapOf(
+            "db_auth" to "acore_auth",
+            "db_characters" to "acore_characters",
+            "db_world" to "acore_world"
+        )
+        val filesByDb = linkedMapOf<String, MutableList<File>>()
+        baseDir.listFiles()?.forEach { databaseDir ->
+            if (!databaseDir.isDirectory) return@forEach
+            val sqlFiles = databaseDir.listFiles { file -> file.isFile && file.extension == "sql" }
+                ?.sortedBy { it.name }
+                ?.toMutableList() ?: mutableListOf()
+            if (sqlFiles.isNotEmpty()) {
+                val runtimeDatabaseName = databaseNameMap[databaseDir.name] ?: databaseDir.name
+                filesByDb[runtimeDatabaseName] = sqlFiles
+            }
+        }
+        return filesByDb
+    }
 
     private fun installDatabaseLibraryLinks() {
         val manifest = JSONObject(File(paths.mariadbBaseDir, "runtime-manifest.json").readText())
@@ -342,6 +397,16 @@ class RealmForegroundService : Service() {
 
     private fun databaseLibraryPath(): String =
         "${paths.mariadbLibDir.absolutePath}:${paths.nativeLibraryDir}"
+
+    private fun configureMysqlEnvironment(builder: ProcessBuilder) {
+        val socketPath = paths.socketFile.absolutePath
+        val env = builder.environment()
+        env["LD_LIBRARY_PATH"] = databaseLibraryPath()
+        env["MYSQL_UNIX_PORT"] = socketPath
+        env["MYSQL_UNIX_ADDR"] = socketPath
+        env["MARIADB_UNIX_PORT"] = socketPath
+        env["MARIADB_UNIX_ADDR"] = socketPath
+    }
 
     private fun streamOutput(process: Process, tag: String) {
         scope.launch {
@@ -423,13 +488,32 @@ class RealmForegroundService : Service() {
         val process = ProcessBuilder(command)
             .directory(paths.root)
             .redirectErrorStream(true)
-            .also { it.environment()["LD_LIBRARY_PATH"] = databaseLibraryPath() }
+            .also { configureMysqlEnvironment(it) }
             .start()
         if (standardInput != null) {
             process.outputStream.bufferedWriter().use { it.write(standardInput) }
         } else {
             process.outputStream.close()
         }
+        process.inputStream.bufferedReader().forEachLine { line ->
+            RealmRuntime.appendLog("[$logPrefix] $line")
+        }
+        val exitCode = process.waitFor()
+        check(exitCode == 0) { "$logPrefix exited with code $exitCode" }
+    }
+
+    private fun runBlockingProcessFromFile(command: List<String>, logPrefix: String, inputFile: File) {
+        val process = ProcessBuilder(command)
+            .directory(paths.root)
+            .redirectErrorStream(true)
+            .also { configureMysqlEnvironment(it) }
+            .start()
+
+        inputFile.inputStream().use { input ->
+            input.copyTo(process.outputStream, bufferSize = 64 * 1024)
+        }
+        process.outputStream.close()
+
         process.inputStream.bufferedReader().forEachLine { line ->
             RealmRuntime.appendLog("[$logPrefix] $line")
         }
@@ -492,5 +576,8 @@ class RealmForegroundService : Service() {
         const val ACTION_STOP = "com.denartes.bygdoketernal.realm.STOP"
         private const val CHANNEL_ID = "realm"
         private const val NOTIFICATION_ID = 1
+
+        internal fun shouldImportDatabaseSchema(markerExists: Boolean, coreSchemaExists: Boolean): Boolean =
+            !markerExists && !coreSchemaExists
     }
 }

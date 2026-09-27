@@ -6,6 +6,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val generatedModuleConfigAssetsDir = layout.buildDirectory.dir("generated/module-config-assets")
+
 android {
     namespace = "com.denartes.bygdoketernal"
     compileSdk = 35
@@ -38,6 +40,7 @@ android {
             // The canonical authserver/worldserver config templates live at
             // the repository root; expose them as assets without copying.
             assets.srcDirs("src/main/assets", "../../configs")
+            assets.srcDir(generatedModuleConfigAssetsDir)
         }
     }
 
@@ -61,6 +64,33 @@ val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
 val assetsSqlDir = file("src/main/assets/sql")
 val assetsMariaDbShareDir = file("src/main/assets/mariadb-share")
 val assetsMariaDbLibDir = file("src/main/assets/mariadb-libs")
+val repoModuleConfigDirs = file("../../modules").listFiles()
+    ?.map { File(it, "conf") }
+    ?.filter { it.isDirectory }
+    .orEmpty()
+
+tasks.register("stageModuleConfigTemplates") {
+    repoModuleConfigDirs.forEach { inputs.dir(it) }
+    inputs.dir(file("../../configs/modules"))
+    outputs.dir(generatedModuleConfigAssetsDir)
+
+    doLast {
+        val modulesAssetDir = generatedModuleConfigAssetsDir.get().file("modules").asFile
+        modulesAssetDir.deleteRecursively()
+        modulesAssetDir.mkdirs()
+
+        repoModuleConfigDirs.forEach { configDir ->
+            configDir.listFiles { candidate ->
+                candidate.isFile && candidate.name.endsWith(".conf.dist")
+            }?.forEach { template ->
+                val canonicalTemplate = file("../../configs/modules/${template.name}")
+                if (!canonicalTemplate.exists()) {
+                    template.copyTo(File(modulesAssetDir, template.name), overwrite = true)
+                }
+            }
+        }
+    }
+}
 
 tasks.register("embedNativeRuntime") {
     if (nativeRuntimeDir.exists()) {
@@ -152,6 +182,7 @@ fun copyRuntimeTree(source: File, destination: File) {
 
 tasks.named("preBuild") {
     dependsOn("embedNativeRuntime")
+    dependsOn("stageModuleConfigTemplates")
 }
 
 dependencies {
@@ -165,4 +196,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
 }
