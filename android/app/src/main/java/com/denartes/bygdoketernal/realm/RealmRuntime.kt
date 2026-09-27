@@ -40,6 +40,12 @@ data class RealmState(
             phase == RealmPhase.STARTING_WORLDSERVER
 }
 
+data class RealmAccount(
+    val id: Int,
+    val username: String,
+    val gmLevel: Int
+)
+
 /** In-process shared state between [RealmForegroundService] and the dashboard UI. */
 object RealmRuntime {
     private const val MAX_LOG_LINES = 500
@@ -50,8 +56,15 @@ object RealmRuntime {
     private val _logLines = MutableStateFlow<List<String>>(emptyList())
     val logLines = _logLines.asStateFlow()
 
+    private val _accounts = MutableStateFlow<List<RealmAccount>>(emptyList())
+    val accounts = _accounts.asStateFlow()
+
     fun updateState(transform: (RealmState) -> RealmState) {
         _state.update(transform)
+    }
+
+    fun setAccounts(accounts: List<RealmAccount>) {
+        _accounts.value = accounts
     }
 
     fun beginStart() {

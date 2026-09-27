@@ -56,10 +56,39 @@ class RealmForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            intentionalStop = true
-            stopRealm()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                intentionalStop = true
+                stopRealm()
+                return START_NOT_STICKY
+            }
+            ACTION_CONSOLE_COMMAND -> {
+                scope.launch { sendConsoleCommand(intent.getStringExtra(EXTRA_COMMAND).orEmpty()) }
+                return START_STICKY
+            }
+            ACTION_REFRESH_ACCOUNTS -> {
+                scope.launch { refreshAccounts() }
+                return START_STICKY
+            }
+            ACTION_CREATE_ACCOUNT -> {
+                scope.launch {
+                    createAccount(
+                        intent.getStringExtra(EXTRA_USERNAME).orEmpty(),
+                        intent.getStringExtra(EXTRA_PASSWORD).orEmpty(),
+                        intent.getBooleanExtra(EXTRA_GM, false)
+                    )
+                }
+                return START_STICKY
+            }
+            ACTION_SET_ACCOUNT_GM_LEVEL -> {
+                scope.launch {
+                    setAccountGmLevel(
+                        intent.getStringExtra(EXTRA_USERNAME).orEmpty(),
+                        intent.getIntExtra(EXTRA_GM_LEVEL, 0)
+                    )
+                }
+                return START_STICKY
+            }
         }
 
         intentionalStop = false
@@ -373,6 +402,7 @@ class RealmForegroundService : Service() {
             RealmRuntime.updateState {
                 it.copy(worldserver = ComponentStatus.RUNNING, phase = RealmPhase.RUNNING)
             }
+            refreshAccounts()
             return
         }
         worldserverProcess = null
@@ -394,6 +424,123 @@ class RealmForegroundService : Service() {
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.RUNNING) }
         RealmRuntime.updateState { it.copy(phase = RealmPhase.RUNNING) }
         updateNotification("Realm running")
+        refreshAccounts()
+    }
+
+    private fun sendConsoleCommand(command: String) {
+        val normalized = command.trim()
+        if (normalized.isEmpty() || normalized.contains('\n') || normalized.contains('\r')) return
+        val process = worldserverProcess
+        if (process?.isAlive != true) {
+            RealmRuntime.appendLog("[console] Worldserver is not running")
+            return
+        }
+        try {
+            synchronized(process) {
+                process.outputStream.write("$normalized\n".toByteArray(Charsets.UTF_8))
+                process.outputStream.flush()
+            }
+            RealmRuntime.appendLog("[console] Command submitted")
+        } catch (error: IOException) {
+            RealmRuntime.appendLog("[console] Failed to send command: ${error.message}")
+        }
+    }
+
+    private fun createAccount(username: String, password: String, makeGm: Boolean) {
+        if (!username.matches(Regex("[A-Za-z0-9_]{3,16}")) ||
+            password.length !in 3..16 || password.any(Char::isWhitespace)
+        ) {
+            RealmRuntime.appendLog("[accounts] Username must be 3-16 letters, digits, or underscores; password must be 3-16 non-space characters")
+            return
+        }
+        if (!sendAccountCommand("account create $username $password")) return
+        RealmRuntime.appendLog("[accounts] Account creation submitted for $username")
+        if (makeGm) {
+            if (!sendAccountCommand("account set gmlevel $username 3 -1")) return
+            RealmRuntime.appendLog("[accounts] GM level 3 submitted for $username")
+        }
+        scope.launch {
+            kotlinx.coroutines.delay(750)
+            refreshAccounts()
+        }
+    }
+
+    private fun setAccountGmLevel(username: String, gmLevel: Int) {
+        if (!username.matches(Regex("[A-Za-z0-9_]{3,16}")) || gmLevel !in 0..3) {
+            RealmRuntime.appendLog("[accounts] Invalid account or GM level")
+            return
+        }
+        if (sendAccountCommand("account set gmlevel $username $gmLevel -1")) {
+            RealmRuntime.appendLog("[accounts] GM level $gmLevel submitted for $username")
+            scope.launch {
+                kotlinx.coroutines.delay(500)
+                refreshAccounts()
+            }
+        }
+    }
+
+    private fun sendAccountCommand(command: String): Boolean {
+        val process = worldserverProcess
+        if (process?.isAlive != true) {
+            RealmRuntime.appendLog("[accounts] Worldserver is not running")
+            return false
+        }
+        return try {
+            synchronized(process) {
+                process.outputStream.write("$command\n".toByteArray(Charsets.UTF_8))
+                process.outputStream.flush()
+            }
+            true
+        } catch (error: IOException) {
+            RealmRuntime.appendLog("[accounts] Failed to send command: ${error.message}")
+            false
+        }
+    }
+
+    private fun refreshAccounts() {
+        val query = """
+            SELECT a.id, a.username, COALESCE(MAX(aa.gmlevel), 0)
+            FROM account a
+            LEFT JOIN account_access aa ON aa.id = a.id AND (aa.RealmID = -1 OR aa.RealmID = 1)
+            GROUP BY a.id, a.username
+            ORDER BY a.id;
+        """.trimIndent()
+        try {
+            val output = runAccountQuery(query)
+            val accounts = output.lineSequence().mapNotNull { line ->
+                val fields = line.split('\t')
+                if (fields.size != 3) return@mapNotNull null
+                val id = fields[0].toIntOrNull() ?: return@mapNotNull null
+                val gmLevel = fields[2].toIntOrNull() ?: return@mapNotNull null
+                RealmAccount(id, fields[1], gmLevel)
+            }.toList()
+            RealmRuntime.setAccounts(accounts)
+        } catch (error: Exception) {
+            RealmRuntime.appendLog("[accounts] Failed to load accounts: ${error.message}")
+        }
+    }
+
+    private fun runAccountQuery(query: String): String {
+        val clientBinary = File(paths.nativeLibraryDir, "libpocket_mariadb_client.so")
+        check(clientBinary.isFile) { "Embedded SQL client is unavailable" }
+        val process = ProcessBuilder(
+            clientBinary.absolutePath,
+            "--no-defaults",
+            "-h", "127.0.0.1",
+            "-P", "3306",
+            "-u", "root",
+            "--batch",
+            "--skip-column-names",
+            "--database", "acore_auth",
+            "-e", query
+        )
+            .directory(paths.root)
+            .redirectErrorStream(true)
+            .also { configureMysqlEnvironment(it) }
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        check(process.waitFor() == 0) { output.ifBlank { "MariaDB query failed" } }
+        return output
     }
 
     private fun stopRealm(resetState: Boolean = true) {
@@ -637,6 +784,15 @@ class RealmForegroundService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.denartes.bygdoketernal.realm.STOP"
+        const val ACTION_CONSOLE_COMMAND = "com.denartes.bygdoketernal.realm.CONSOLE_COMMAND"
+        const val ACTION_REFRESH_ACCOUNTS = "com.denartes.bygdoketernal.realm.REFRESH_ACCOUNTS"
+        const val ACTION_CREATE_ACCOUNT = "com.denartes.bygdoketernal.realm.CREATE_ACCOUNT"
+        const val ACTION_SET_ACCOUNT_GM_LEVEL = "com.denartes.bygdoketernal.realm.SET_ACCOUNT_GM_LEVEL"
+        const val EXTRA_COMMAND = "command"
+        const val EXTRA_USERNAME = "username"
+        const val EXTRA_PASSWORD = "password"
+        const val EXTRA_GM = "gm"
+        const val EXTRA_GM_LEVEL = "gmLevel"
         private const val CHANNEL_ID = "realm"
         private const val NOTIFICATION_ID = 1
 
