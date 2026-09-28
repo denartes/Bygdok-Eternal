@@ -1,0 +1,17 @@
+diff --git a/src/server/apps/authserver/Main.cpp b/src/server/apps/authserver/Main.cpp
+--- a/src/server/apps/authserver/Main.cpp
++++ b/src/server/apps/authserver/Main.cpp
+@@ -1,5 +1,6 @@
+     if (!sAuthSocketMgr.StartNetwork(*ioContext, bindIp, port))
+     {
+         LOG_ERROR("server.authserver", "Failed to initialize network");
+         return 1;
+     }
++    std::cout << "BYGDOK_READY:authserver" << std::endl;
+diff --git a/src/server/apps/worldserver/Main.cpp b/src/server/apps/worldserver/Main.cpp
+--- a/src/server/apps/worldserver/Main.cpp
++++ b/src/server/apps/worldserver/Main.cpp
+@@ -1,2 +1,3 @@
+     realm.PopulationLevel = 0.0f;
+     realm.Flags = RealmFlags(realm.Flags & ~uint32(REALM_FLAG_VERSION_MISMATCH));
++    std::cout << "BYGDOK_READY:worldserver" << std::endl;

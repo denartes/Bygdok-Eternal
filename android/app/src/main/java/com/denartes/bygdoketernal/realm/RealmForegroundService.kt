@@ -14,15 +14,24 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import com.denartes.bygdoketernal.realm.RealmPhase
-import java.net.InetSocketAddress
-import java.net.Socket
+import com.denartes.bygdoketernal.realm.RealmNetworkSettings
+import com.denartes.bygdoketernal.realm.RealmNetworkSettingsStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
+
+private data class ProcessStartupSignal(val ready: Boolean, val exitCode: Int? = null)
+
+private data class ProcessReadiness(
+    val firstSignal: CompletableDeferred<ProcessStartupSignal> = CompletableDeferred()
+)
 
 /**
  * Foreground service that launches the embedded mariadbd, authserver, and
@@ -57,6 +66,30 @@ class RealmForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_START_REALM -> {
+                intentionalStop = false
+                startForeground(NOTIFICATION_ID, buildNotification("Starting realm..."))
+                scope.launch { startRealm() }
+                return START_STICKY
+            }
+            ACTION_START_DATABASE_ONLY -> {
+                intentionalStop = false
+                startForeground(NOTIFICATION_ID, buildNotification("Starting MariaDB..."))
+                scope.launch { startDatabaseOnly() }
+                return START_STICKY
+            }
+            ACTION_COMPLETE_INITIAL_SETUP -> {
+                scope.launch {
+                    completeInitialSetup(
+                        intent.getStringExtra(EXTRA_REALM_NAME).orEmpty(),
+                        intent.getStringExtra(EXTRA_REALM_ADDRESS).orEmpty(),
+                        intent.getStringExtra(EXTRA_LOCAL_ADDRESS).orEmpty(),
+                        intent.getStringExtra(EXTRA_USERNAME).orEmpty(),
+                        intent.getStringExtra(EXTRA_PASSWORD).orEmpty()
+                    )
+                }
+                return START_STICKY
+            }
             ACTION_STOP -> {
                 intentionalStop = true
                 stopRealm()
@@ -89,12 +122,27 @@ class RealmForegroundService : Service() {
                 }
                 return START_STICKY
             }
+            ACTION_LOAD_NETWORK_SETTINGS -> {
+                scope.launch { loadRealmNetworkSettings() }
+                return START_STICKY
+            }
+            ACTION_SAVE_NETWORK_SETTINGS -> {
+                scope.launch {
+                    saveRealmNetworkSettings(
+                        intent.getStringExtra(EXTRA_REALM_ADDRESS).orEmpty(),
+                        intent.getStringExtra(EXTRA_LOCAL_ADDRESS).orEmpty()
+                    )
+                }
+                return START_STICKY
+            }
+            null -> {
+                intentionalStop = false
+                startForeground(NOTIFICATION_ID, buildNotification("Restoring MariaDB..."))
+                scope.launch { startDatabaseOnly() }
+                return START_STICKY
+            }
+            else -> return START_NOT_STICKY
         }
-
-        intentionalStop = false
-        startForeground(NOTIFICATION_ID, buildNotification("Starting realm..."))
-        scope.launch { startRealm() }
-        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -120,6 +168,93 @@ class RealmForegroundService : Service() {
             updateNotification("Realm failed to start")
             RealmRuntime.resetToDefault()
             stopRealm(resetState = false)
+        }
+    }
+
+    private suspend fun startDatabaseOnly() {
+        if (authserverProcess?.isAlive == true || worldserverProcess?.isAlive == true) {
+            RealmRuntime.appendLog("[setup] Stop the realm before starting database-only setup")
+            return
+        }
+        try {
+            paths.ensureDirectories()
+            clearNativeLogs()
+            RealmConfigInstaller(this, paths).install()
+            startNativeLogTail()
+            startDatabase()
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.DATABASE_READY) }
+            updateNotification("MariaDB ready for first-run setup")
+        } catch (error: Throwable) {
+            RealmRuntime.appendLog("[setup] MariaDB startup failed: ${error.message}")
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.FAILED, database = ComponentStatus.FAILED) }
+            updateNotification("MariaDB failed to start")
+            stopRealm(resetState = false)
+        }
+    }
+
+    private fun completeInitialSetup(
+        realmName: String,
+        realmAddress: String,
+        localAddress: String,
+        username: String,
+        password: String
+    ) {
+        val name = realmName.trim()
+        val address = realmAddress.trim()
+        val local = localAddress.trim()
+        val accountName = username.trim().uppercase(java.util.Locale.ROOT)
+        if (!isValidRealmName(name)) {
+            RealmRuntime.appendLog("[setup] Realm name must be 1-32 characters without control characters")
+            return
+        }
+        if (!isValidRealmAddress(address) || !isValidRealmAddress(local)) {
+            RealmRuntime.appendLog("[setup] Enter a valid IPv4 address or hostname for both addresses")
+            return
+        }
+        if (!accountName.matches(Regex("[A-Z0-9_]{3,16}")) ||
+            password.length !in 3..16 || password.any { it.code !in 33..126 }
+        ) {
+            RealmRuntime.appendLog("[setup] GM username must be 3-16 letters, digits, or underscores; password must be 3-16 printable ASCII characters")
+            return
+        }
+        if (mariadbProcess?.isAlive != true) {
+            RealmRuntime.appendLog("[setup] Start MariaDB before saving first-run setup")
+            return
+        }
+        if (authserverProcess?.isAlive == true || worldserverProcess?.isAlive == true) {
+            RealmRuntime.appendLog("[setup] Stop authserver and worldserver before saving first-run setup")
+            return
+        }
+
+        RealmRuntime.updateState { it.copy(phase = RealmPhase.CONFIGURING_INITIAL_SETUP) }
+        try {
+            val credentials = RealmAccountCredentialGenerator.generate(accountName, password)
+            val escapedName = name.replace("'", "''")
+            val setupSql = """
+                START TRANSACTION;
+                INSERT INTO account (username, salt, verifier)
+                VALUES ('$accountName', UNHEX('${credentials.saltHex}'), UNHEX('${credentials.verifierHex}'));
+                SET @initial_account_id = LAST_INSERT_ID();
+                INSERT INTO account_access (id, gmlevel, RealmID, comment)
+                VALUES (@initial_account_id, 3, -1, 'Initial GM account');
+                UPDATE realmlist
+                SET name = '$escapedName', address = '$address', localAddress = '$local'
+                WHERE id = 1;
+                COMMIT;
+            """.trimIndent()
+            runAuthDatabaseQuery(setupSql)
+
+            val networkSettings = RealmNetworkSettings(address, local)
+            RealmNetworkSettingsStore(this).save(networkSettings)
+            RealmSetupStore(this).markComplete(name)
+            RealmRuntime.setNetworkSettings(networkSettings)
+            RealmRuntime.setSetupComplete(true, name)
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.DATABASE_READY) }
+            RealmRuntime.appendLog("[setup] Realm '$name' and initial GM account '$accountName' created")
+            updateNotification("First-run setup complete; MariaDB is ready")
+        } catch (error: Exception) {
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.DATABASE_READY) }
+            RealmRuntime.appendLog("[setup] Failed to save first-run setup: ${error.message}")
         }
     }
 
@@ -168,15 +303,16 @@ class RealmForegroundService : Service() {
             .also { configureMysqlEnvironment(it) }
             .start()
         mariadbProcess = process
-        streamOutput(process, "mariadbd")
-        monitorExit(process, "mariadbd") { ComponentStatus.FAILED }
+        val readiness = ProcessReadiness()
+        streamOutput(process, "mariadbd", readiness)
+        monitorExit(process, "mariadbd", readiness) { ComponentStatus.FAILED }
 
-        waitForTcpPort("127.0.0.1", 3306, timeoutMillis = 60_000) {
-            mariadbProcess?.isAlive == true
-        }
-        RealmRuntime.appendLog("[realm] Database phase: MariaDB port 3306 ready")
+        awaitProcessReadiness(process, "mariadbd", readiness, DATABASE_STARTUP_WATCHDOG_MS)
+        RealmRuntime.appendLog("[realm] Database phase: MariaDB readiness event received")
 
         bootstrapDatabaseSchema()
+        applySavedRealmNetworkSettings()
+        refreshRealmNetworkSettings()
 
         RealmRuntime.updateState { it.copy(database = ComponentStatus.RUNNING) }
     }
@@ -384,11 +520,12 @@ class RealmForegroundService : Service() {
             .also { configureMysqlEnvironment(it) }
             .start()
         authserverProcess = process
-        streamOutput(process, "authserver")
-        monitorExit(process, "authserver") { ComponentStatus.FAILED }
+        val readiness = ProcessReadiness()
+        streamOutput(process, "authserver", readiness)
+        monitorExit(process, "authserver", readiness) { ComponentStatus.FAILED }
 
-        waitForTcpPort("127.0.0.1", 3724, 60_000) { process.isAlive }
-        RealmRuntime.appendLog("[realm] Authserver phase: port 3724 ready")
+        awaitProcessReadiness(process, "authserver", readiness, AUTHSERVER_STARTUP_WATCHDOG_MS)
+        RealmRuntime.appendLog("[realm] Authserver phase: readiness event received")
         RealmRuntime.updateState { it.copy(authserver = ComponentStatus.RUNNING) }
     }
 
@@ -416,11 +553,12 @@ class RealmForegroundService : Service() {
             .also { configureMysqlEnvironment(it) }
             .start()
         worldserverProcess = process
-        streamOutput(process, "worldserver")
-        monitorExit(process, "worldserver") { ComponentStatus.FAILED }
+        val readiness = ProcessReadiness()
+        streamOutput(process, "worldserver", readiness)
+        monitorExit(process, "worldserver", readiness) { ComponentStatus.FAILED }
 
-        waitForTcpPort("127.0.0.1", 8085, 120_000) { process.isAlive }
-        RealmRuntime.appendLog("[realm] Worldserver phase: port 8085 ready")
+        awaitProcessReadiness(process, "worldserver", readiness, WORLDSERVER_STARTUP_WATCHDOG_MS)
+        RealmRuntime.appendLog("[realm] Worldserver phase: readiness event received")
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.RUNNING) }
         RealmRuntime.updateState { it.copy(phase = RealmPhase.RUNNING) }
         updateNotification("Realm running")
@@ -506,7 +644,7 @@ class RealmForegroundService : Service() {
             ORDER BY a.id;
         """.trimIndent()
         try {
-            val output = runAccountQuery(query)
+            val output = runAuthDatabaseQuery(query)
             val accounts = output.lineSequence().mapNotNull { line ->
                 val fields = line.split('\t')
                 if (fields.size != 3) return@mapNotNull null
@@ -520,7 +658,61 @@ class RealmForegroundService : Service() {
         }
     }
 
-    private fun runAccountQuery(query: String): String {
+    private suspend fun loadRealmNetworkSettings() {
+        if (mariadbProcess?.isAlive != true) {
+            RealmRuntime.appendLog("[network] Start MariaDB or the realm before loading addresses")
+            return
+        }
+        refreshRealmNetworkSettings()
+    }
+
+    private fun refreshRealmNetworkSettings() {
+        try {
+            val output = runAuthDatabaseQuery(
+                "SELECT address, localAddress FROM realmlist WHERE id = 1;"
+            )
+            val fields = output.lineSequence().firstOrNull()?.split('\t')
+            if (fields == null || fields.size != 2) {
+                throw IllegalStateException("Realm row 1 was not found")
+            }
+            val settings = RealmNetworkSettings(realmAddress = fields[0], localAddress = fields[1])
+            RealmRuntime.setNetworkSettings(settings)
+            RealmNetworkSettingsStore(this).save(settings)
+        } catch (error: Exception) {
+            RealmRuntime.appendLog("[network] Failed to load realm addresses: ${error.message}")
+        }
+    }
+
+    private fun saveRealmNetworkSettings(realmAddress: String, localAddress: String) {
+        val address = realmAddress.trim()
+        val local = localAddress.trim()
+        if (!isValidRealmAddress(address) || !isValidRealmAddress(local)) {
+            RealmRuntime.appendLog("[network] Enter a valid IPv4 address or hostname for both fields")
+            return
+        }
+        applyRealmNetworkSettings(address, local)
+    }
+
+    private fun applySavedRealmNetworkSettings() {
+        val settings = RealmNetworkSettingsStore(this).load()
+        if (isValidRealmAddress(settings.realmAddress) && isValidRealmAddress(settings.localAddress)) {
+            applyRealmNetworkSettings(settings.realmAddress, settings.localAddress)
+        }
+    }
+
+    private fun applyRealmNetworkSettings(address: String, local: String) {
+        try {
+            runAuthDatabaseQuery(
+                "UPDATE realmlist SET address = '$address', localAddress = '$local' WHERE id = 1;"
+            )
+            refreshRealmNetworkSettings()
+            RealmRuntime.appendLog("[network] Realm addresses applied; reconnect clients to use the new values")
+        } catch (error: Exception) {
+            RealmRuntime.appendLog("[network] Failed to apply realm addresses: ${error.message}")
+        }
+    }
+
+    private fun runAuthDatabaseQuery(query: String): String {
         val clientBinary = File(paths.nativeLibraryDir, "libpocket_mariadb_client.so")
         check(clientBinary.isFile) { "Embedded SQL client is unavailable" }
         val process = ProcessBuilder(
@@ -618,11 +810,16 @@ class RealmForegroundService : Service() {
         env["MARIADB_UNIX_ADDR"] = socketPath
     }
 
-    private fun streamOutput(process: Process, tag: String) {
+    private fun streamOutput(process: Process, tag: String, readiness: ProcessReadiness) {
         scope.launch {
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line -> RealmRuntime.appendLog("[$tag] $line") }
+                    lines.forEach { line ->
+                        RealmRuntime.appendLog("[$tag] $line")
+                        if (matchesReadinessSignal(tag, line)) {
+                            readiness.firstSignal.complete(ProcessStartupSignal(ready = true))
+                        }
+                    }
                 }
             } catch (_: IOException) {
                 // Process pipes can close while the service is stopping.
@@ -671,9 +868,15 @@ class RealmForegroundService : Service() {
         paths.logsDir.listFiles()?.forEach { it.delete() }
     }
 
-    private fun monitorExit(process: Process, tag: String, onExit: () -> ComponentStatus) {
+    private fun monitorExit(
+        process: Process,
+        tag: String,
+        readiness: ProcessReadiness,
+        onExit: () -> ComponentStatus
+    ) {
         scope.launch {
             val exitCode = process.waitFor()
+            readiness.firstSignal.complete(ProcessStartupSignal(ready = false, exitCode = exitCode))
             RealmRuntime.appendLog("[$tag] exited with code $exitCode")
             val status = onExit()
             when (tag) {
@@ -731,25 +934,19 @@ class RealmForegroundService : Service() {
         check(exitCode == 0) { "$logPrefix exited with code $exitCode" }
     }
 
-    private suspend fun waitForTcpPort(
-        host: String,
-        port: Int,
-        timeoutMillis: Long,
-        isProcessAlive: () -> Boolean = { true }
+    private suspend fun awaitProcessReadiness(
+        process: Process,
+        tag: String,
+        readiness: ProcessReadiness,
+        watchdogMillis: Long
     ) {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (System.currentTimeMillis() < deadline) {
-            check(isProcessAlive()) { "Process exited before $host:$port became ready" }
-            try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(host, port), 1_000)
-                }
-                return
-            } catch (_: Exception) {
-                kotlinx.coroutines.delay(1_000)
-            }
+        val signal = try {
+            withTimeout(watchdogMillis) { readiness.firstSignal.await() }
+        } catch (error: TimeoutCancellationException) {
+            throw IllegalStateException("No readiness event received from $tag before watchdog expired", error)
         }
-        error("Timed out waiting for database on $host:$port")
+        check(signal.ready) { "$tag exited with code ${signal.exitCode} before readiness" }
+        check(process.isAlive) { "$tag exited immediately after its readiness event" }
     }
 
     private fun createNotificationChannel() {
@@ -784,17 +981,28 @@ class RealmForegroundService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.denartes.bygdoketernal.realm.STOP"
+        const val ACTION_START_REALM = "com.denartes.bygdoketernal.realm.START_REALM"
+        const val ACTION_START_DATABASE_ONLY = "com.denartes.bygdoketernal.realm.START_DATABASE_ONLY"
+        const val ACTION_COMPLETE_INITIAL_SETUP = "com.denartes.bygdoketernal.realm.COMPLETE_INITIAL_SETUP"
         const val ACTION_CONSOLE_COMMAND = "com.denartes.bygdoketernal.realm.CONSOLE_COMMAND"
         const val ACTION_REFRESH_ACCOUNTS = "com.denartes.bygdoketernal.realm.REFRESH_ACCOUNTS"
         const val ACTION_CREATE_ACCOUNT = "com.denartes.bygdoketernal.realm.CREATE_ACCOUNT"
         const val ACTION_SET_ACCOUNT_GM_LEVEL = "com.denartes.bygdoketernal.realm.SET_ACCOUNT_GM_LEVEL"
+        const val ACTION_LOAD_NETWORK_SETTINGS = "com.denartes.bygdoketernal.realm.LOAD_NETWORK_SETTINGS"
+        const val ACTION_SAVE_NETWORK_SETTINGS = "com.denartes.bygdoketernal.realm.SAVE_NETWORK_SETTINGS"
         const val EXTRA_COMMAND = "command"
         const val EXTRA_USERNAME = "username"
         const val EXTRA_PASSWORD = "password"
         const val EXTRA_GM = "gm"
         const val EXTRA_GM_LEVEL = "gmLevel"
+        const val EXTRA_REALM_ADDRESS = "realmAddress"
+        const val EXTRA_LOCAL_ADDRESS = "localAddress"
+        const val EXTRA_REALM_NAME = "realmName"
         private const val CHANNEL_ID = "realm"
         private const val NOTIFICATION_ID = 1
+        private const val DATABASE_STARTUP_WATCHDOG_MS = 60_000L
+        private const val AUTHSERVER_STARTUP_WATCHDOG_MS = 60_000L
+        private const val WORLDSERVER_STARTUP_WATCHDOG_MS = 15 * 60_000L
 
         internal fun shouldImportDatabaseSchema(markerExists: Boolean, coreSchemaExists: Boolean): Boolean =
             !markerExists && !coreSchemaExists
@@ -805,6 +1013,19 @@ class RealmForegroundService : Service() {
         internal fun requiresTransmogSchemaTableCheck(moduleName: String, database: String): Boolean =
             moduleName == "mod-transmog-plus" && database == "acore_characters"
     }
+}
+
+internal fun isValidRealmAddress(address: String): Boolean =
+    address.length in 1..253 && address.matches(Regex("[A-Za-z0-9.-]+"))
+
+internal fun isValidRealmName(name: String): Boolean =
+    name.length in 1..32 && name.none(Char::isISOControl)
+
+internal fun matchesReadinessSignal(tag: String, line: String): Boolean = when (tag) {
+    "mariadbd" -> line.contains("ready for connections", ignoreCase = true)
+    "authserver" -> line.contains("BYGDOK_READY:authserver")
+    "worldserver" -> line.contains("BYGDOK_READY:worldserver")
+    else -> false
 }
 
 internal data class RealmModuleDatabaseBootstrapBatch(

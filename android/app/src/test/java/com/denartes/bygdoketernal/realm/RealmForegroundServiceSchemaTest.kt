@@ -8,6 +8,38 @@ import java.io.File
 
 class RealmForegroundServiceSchemaTest {
     @Test
+    fun `process readiness signals match each daemon and ignore routine output`() {
+        assertTrue(matchesReadinessSignal("mariadbd", "mariadbd: ready for connections"))
+        assertTrue(matchesReadinessSignal("authserver", "BYGDOK_READY:authserver"))
+        assertTrue(matchesReadinessSignal("worldserver", "BYGDOK_READY:worldserver"))
+        assertFalse(matchesReadinessSignal("worldserver", "Creating random bot characters"))
+        assertFalse(matchesReadinessSignal("playerbots", "BYGDOK_READY:worldserver"))
+    }
+
+    @Test
+    fun `realm address accepts hostnames and rejects sql syntax`() {
+        assertTrue(isValidRealmAddress("192.168.0.100"))
+        assertTrue(isValidRealmAddress("realm.example.com"))
+        assertFalse(isValidRealmAddress("192.168.0.100; DROP TABLE realmlist"))
+        assertFalse(isValidRealmAddress(""))
+    }
+
+    @Test
+    fun `realm name permits normal labels and rejects control characters or excess length`() {
+        assertTrue(isValidRealmName("My Realm's Home"))
+        assertFalse(isValidRealmName("Realm\nName"))
+        assertFalse(isValidRealmName("R".repeat(33)))
+    }
+
+    @Test
+    fun `initial account credentials match fixed size SRP6 database fields`() {
+        val credentials = RealmAccountCredentialGenerator.generate("PLAYER", "password123")
+
+        assertTrue(credentials.saltHex.matches(Regex("[0-9A-F]{64}")))
+        assertTrue(credentials.verifierHex.matches(Regex("[0-9A-F]{64}")))
+    }
+
+    @Test
     fun `module base sql supports data and legacy module layouts`() {
         val modulesDir = File.createTempFile("module-sql", "")
         modulesDir.delete()

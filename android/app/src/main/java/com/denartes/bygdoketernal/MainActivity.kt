@@ -18,9 +18,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -52,8 +54,13 @@ import androidx.core.content.ContextCompat
 import com.denartes.bygdoketernal.realm.ComponentStatus
 import com.denartes.bygdoketernal.realm.RealmAccount
 import com.denartes.bygdoketernal.realm.RealmForegroundService
+import com.denartes.bygdoketernal.realm.RealmNetworkSettings
+import com.denartes.bygdoketernal.realm.RealmNetworkSettingsStore
 import com.denartes.bygdoketernal.realm.RealmPhase
 import com.denartes.bygdoketernal.realm.RealmRuntime
+import com.denartes.bygdoketernal.realm.RealmSetupStore
+import com.denartes.bygdoketernal.realm.isValidRealmAddress
+import com.denartes.bygdoketernal.realm.isValidRealmName
 
 class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher =
@@ -62,13 +69,23 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
+        val networkSettingsStore = RealmNetworkSettingsStore(this)
+        val savedNetworkSettings = networkSettingsStore.load()
+        RealmRuntime.setNetworkSettings(savedNetworkSettings)
+        val setupStore = RealmSetupStore(this)
+        RealmRuntime.setSetupComplete(setupStore.isComplete(), setupStore.realmName())
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    DashboardScreen(
+                    val state by RealmRuntime.state.collectAsState()
+                    val setupComplete by RealmRuntime.setupComplete.collectAsState()
+                    if (setupComplete) DashboardScreen(
                         onStart = {
                             RealmRuntime.beginStart()
-                            startForegroundService(Intent(this, RealmForegroundService::class.java))
+                            startForegroundService(
+                                Intent(this, RealmForegroundService::class.java)
+                                    .setAction(RealmForegroundService.ACTION_START_REALM)
+                            )
                         },
                         onStop = {
                             RealmRuntime.resetToDefault()
@@ -97,6 +114,36 @@ class MainActivity : ComponentActivity() {
                                 putExtra(RealmForegroundService.EXTRA_USERNAME, username)
                                 putExtra(RealmForegroundService.EXTRA_GM_LEVEL, gmLevel)
                             }
+                        },
+                        onLoadNetworkSettings = {
+                            sendRealmAction(RealmForegroundService.ACTION_LOAD_NETWORK_SETTINGS)
+                        },
+                        onSaveNetworkSettings = { realmAddress, localAddress ->
+                            networkSettingsStore.save(
+                                RealmNetworkSettings(realmAddress, localAddress)
+                            )
+                            RealmRuntime.setNetworkSettings(RealmNetworkSettings(realmAddress, localAddress))
+                        },
+                        onApplyNetworkSettings = { realmAddress, localAddress ->
+                            sendRealmAction(RealmForegroundService.ACTION_SAVE_NETWORK_SETTINGS) {
+                                putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
+                                putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
+                            }
+                        }
+                    ) else InitialSetupScreen(
+                        state = state,
+                        onStartDatabase = {
+                            RealmRuntime.beginDatabaseOnlyStart()
+                            sendRealmAction(RealmForegroundService.ACTION_START_DATABASE_ONLY)
+                        },
+                        onComplete = { realmName, realmAddress, localAddress, username, password ->
+                            sendRealmAction(RealmForegroundService.ACTION_COMPLETE_INITIAL_SETUP) {
+                                putExtra(RealmForegroundService.EXTRA_REALM_NAME, realmName)
+                                putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
+                                putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
+                                putExtra(RealmForegroundService.EXTRA_USERNAME, username)
+                                putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
+                            }
                         }
                     )
                 }
@@ -122,19 +169,138 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+private fun InitialSetupScreen(
+    state: com.denartes.bygdoketernal.realm.RealmState,
+    onStartDatabase: () -> Unit,
+    onComplete: (String, String, String, String, String) -> Unit
+) {
+    val networkSettings by RealmRuntime.networkSettings.collectAsState()
+    val logLines by RealmRuntime.logLines.collectAsState()
+    var realmName by rememberSaveable { mutableStateOf("") }
+    var realmAddress by rememberSaveable { mutableStateOf(networkSettings.realmAddress) }
+    var localAddress by rememberSaveable { mutableStateOf(networkSettings.localAddress) }
+    var username by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    val lastSetupMessage = logLines.lastOrNull { it.startsWith("[setup]") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("BYGDOK ETERNAL", style = MaterialTheme.typography.headlineMedium)
+        Text("First-run setup", style = MaterialTheme.typography.titleLarge)
+        if (state.database != ComponentStatus.RUNNING) {
+            Text(statusLabel(state.database), style = MaterialTheme.typography.bodyMedium)
+            Button(
+                onClick = onStartDatabase,
+                enabled = !state.isBusy,
+                modifier = Modifier.fillMaxWidth().height(54.dp)
+            ) {
+                if (state.isBusy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.height(20.dp),
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.65f),
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(phaseLabel(state.phase))
+                } else {
+                    Text("START MARIADB")
+                }
+            }
+        } else {
+            OutlinedTextField(
+                value = realmName,
+                onValueChange = { realmName = it },
+                label = { Text("Realm name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = realmAddress,
+                onValueChange = { realmAddress = it },
+                label = { Text("Realm address") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = localAddress,
+                onValueChange = { localAddress = it },
+                label = { Text("Local address") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = username,
+                onValueChange = { username = it },
+                label = { Text("Initial GM username") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("Initial GM password") },
+                supportingText = { Text("3-16 printable ASCII characters") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Button(
+                onClick = {
+                    onComplete(realmName.trim(), realmAddress.trim(), localAddress.trim(), username.trim(), password)
+                },
+                enabled = !state.isBusy &&
+                    isValidRealmName(realmName.trim()) &&
+                    isValidRealmAddress(realmAddress.trim()) &&
+                    isValidRealmAddress(localAddress.trim()) &&
+                    username.trim().matches(Regex("[A-Za-z0-9_]{3,16}")) &&
+                    password.length in 3..16 && password.all { it.code in 33..126 },
+                modifier = Modifier.fillMaxWidth().height(54.dp)
+            ) {
+                if (state.isBusy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.height(20.dp),
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.65f),
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("Saving setup...")
+                } else {
+                    Text("SAVE SETUP AND CREATE GM")
+                }
+            }
+        }
+        if (lastSetupMessage != null) {
+            Text(lastSetupMessage, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
 private fun DashboardScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onConsoleCommand: (String) -> Unit,
     onRefreshAccounts: () -> Unit,
     onCreateAccount: (String, String, Boolean) -> Unit,
-    onSetAccountGmLevel: (String, Int) -> Unit
+    onSetAccountGmLevel: (String, Int) -> Unit,
+    onLoadNetworkSettings: () -> Unit,
+    onSaveNetworkSettings: (String, String) -> Unit,
+    onApplyNetworkSettings: (String, String) -> Unit
 ) {
     val state by RealmRuntime.state.collectAsState()
     val logLines by RealmRuntime.logLines.collectAsState()
     val accounts by RealmRuntime.accounts.collectAsState()
+    val networkSettings by RealmRuntime.networkSettings.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(0) }
 
+    LaunchedEffect(state.database) {
+        if (state.database == ComponentStatus.RUNNING) onLoadNetworkSettings()
+    }
     LaunchedEffect(state.worldserver) {
         if (state.worldserver == ComponentStatus.RUNNING) onRefreshAccounts()
     }
@@ -147,12 +313,13 @@ private fun DashboardScreen(
     ) {
         Text("BYGDOK ETERNAL", style = MaterialTheme.typography.headlineMedium)
         TabRow(selectedTabIndex = selectedTab) {
-            listOf("Overview", "Accounts", "Console").forEachIndexed { index, title ->
+            listOf("Overview", "Accounts", "Network", "Console").forEachIndexed { index, title ->
                 Tab(
                     selected = selectedTab == index,
                     onClick = {
                         selectedTab = index
                         if (index == 1 && state.worldserver == ComponentStatus.RUNNING) onRefreshAccounts()
+                        if (index == 2 && state.database == ComponentStatus.RUNNING) onLoadNetworkSettings()
                     },
                     text = { Text(title) }
                 )
@@ -167,7 +334,19 @@ private fun DashboardScreen(
                 onSetGmLevel = onSetAccountGmLevel,
                 modifier = Modifier.weight(1f)
             )
-            2 -> ConsolePanel(
+            2 -> NetworkPanel(
+                settings = networkSettings,
+                databaseRunning = state.database == ComponentStatus.RUNNING,
+                onReload = onLoadNetworkSettings,
+                onSave = { realmAddress, localAddress ->
+                    onSaveNetworkSettings(realmAddress, localAddress)
+                    if (state.database == ComponentStatus.RUNNING) {
+                        onApplyNetworkSettings(realmAddress, localAddress)
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
+            3 -> ConsolePanel(
                 logLines = logLines,
                 enabled = state.worldserver == ComponentStatus.RUNNING,
                 onSend = onConsoleCommand,
@@ -181,6 +360,59 @@ private fun DashboardScreen(
                 modifier = Modifier.weight(1f)
             )
         }
+    }
+}
+
+@Composable
+private fun NetworkPanel(
+    settings: RealmNetworkSettings,
+    databaseRunning: Boolean,
+    onReload: () -> Unit,
+    onSave: (String, String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var realmAddress by rememberSaveable { mutableStateOf(settings.realmAddress) }
+    var localAddress by rememberSaveable { mutableStateOf(settings.localAddress) }
+
+    LaunchedEffect(settings) {
+        realmAddress = settings.realmAddress
+        localAddress = settings.localAddress
+    }
+
+    Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Network", style = MaterialTheme.typography.titleLarge)
+        OutlinedTextField(
+            value = realmAddress,
+            onValueChange = { realmAddress = it },
+            label = { Text("Realm address") },
+            supportingText = { Text("Address returned to clients outside the local subnet") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = localAddress,
+            onValueChange = { localAddress = it },
+            label = { Text("Local address") },
+            supportingText = { Text("Address returned to clients on the local subnet") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { onSave(realmAddress.trim(), localAddress.trim()) },
+                enabled = isValidRealmAddress(realmAddress.trim()) && isValidRealmAddress(localAddress.trim()),
+                modifier = Modifier.weight(1f)
+            ) { Text("Save addresses") }
+            OutlinedButton(onClick = onReload, enabled = databaseRunning) { Text("Reload") }
+        }
+        Text(
+            if (databaseRunning) {
+                "Saved addresses apply to new login sessions."
+            } else {
+                "Saved for next start; clients receive the addresses after the realm starts."
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
 
@@ -388,6 +620,8 @@ private fun statusLabel(status: ComponentStatus): String = when (status) {
 
 private fun phaseLabel(phase: RealmPhase): String = when (phase) {
     RealmPhase.STARTING_DATABASE -> "Starting database..."
+    RealmPhase.DATABASE_READY -> "MariaDB ready"
+    RealmPhase.CONFIGURING_INITIAL_SETUP -> "Saving setup..."
     RealmPhase.STARTING_AUTHSERVER -> "Starting authserver..."
     RealmPhase.PREPARING_CLIENT_DATA -> "Preparing client data..."
     RealmPhase.STARTING_WORLDSERVER -> "Starting worldserver..."
