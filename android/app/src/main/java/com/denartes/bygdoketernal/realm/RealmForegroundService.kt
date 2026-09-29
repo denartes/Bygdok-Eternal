@@ -239,13 +239,13 @@ class RealmForegroundService : Service() {
                 startWorldserver()
                 reapplyCurrentRealmConfiguration(currentRealmName, currentNetworkSettings)
                 refreshRealmNetworkSettings()
-                validateImportedRealm()
+                val importedSettings = validateImportedRealm()
                 intentionalStop = true
                 stopProcessesOnly()
                 intentionalStop = false
                 previousData.deleteRecursively()
-                RealmSetupStore(this).markComplete(readRealmDatabaseSettings().realmName)
-                RealmRuntime.setSetupComplete(true, readRealmDatabaseSettings().realmName)
+                RealmSetupStore(this).markComplete(importedSettings.realmName)
+                RealmRuntime.setSetupComplete(true, importedSettings.realmName)
                 RealmRuntime.resetToDefault()
                 RealmRuntime.appendLog("[import] Realm import completed successfully")
                 updateNotification("Realm import complete; start the realm")
@@ -335,7 +335,7 @@ class RealmForegroundService : Service() {
         RealmRuntime.appendLog("[import] Reapplied APK realm name and network settings")
     }
 
-    private fun validateImportedRealm() {
+    private fun validateImportedRealm(): PersistedRealmSettings {
         val settings = readRealmDatabaseSettings()
         check(settings.realmName.isNotBlank()) { "Imported realm has no name" }
         check(isValidRealmAddress(settings.realmAddress)) { "Imported realm address is invalid" }
@@ -354,6 +354,7 @@ class RealmForegroundService : Service() {
             "Imported Transmog Plus appearance table is missing"
         }
         RealmRuntime.appendLog("[import] Transmog appearance rows: ${transmogCount.trim()}")
+        return settings
     }
 
     private fun completeInitialSetup(
