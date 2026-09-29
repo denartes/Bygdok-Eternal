@@ -228,6 +228,7 @@ class RealmForegroundService : Service() {
 
         RealmRuntime.updateState { it.copy(phase = RealmPhase.CONFIGURING_INITIAL_SETUP) }
         try {
+            readRealmDatabaseSettings()
             val credentials = RealmAccountCredentialGenerator.generate(accountName, password)
             val escapedName = name.replace("'", "''")
             val setupSql = """
@@ -243,12 +244,18 @@ class RealmForegroundService : Service() {
                 COMMIT;
             """.trimIndent()
             runAuthDatabaseQuery(setupSql)
+            val persistedSettings = readRealmDatabaseSettings()
+            check(
+                persistedSettings.realmName == name &&
+                    persistedSettings.realmAddress == address &&
+                    persistedSettings.localAddress == local
+            ) { "Saved realm settings could not be verified" }
 
             val networkSettings = RealmNetworkSettings(address, local)
             RealmNetworkSettingsStore(this).save(networkSettings)
-            RealmSetupStore(this).markComplete(name)
+            RealmSetupStore(this).markComplete(persistedSettings.realmName)
             RealmRuntime.setNetworkSettings(networkSettings)
-            RealmRuntime.setSetupComplete(true, name)
+            RealmRuntime.setSetupComplete(true, persistedSettings.realmName)
             RealmRuntime.updateState { it.copy(phase = RealmPhase.DATABASE_READY) }
             RealmRuntime.appendLog("[setup] Realm '$name' and initial GM account '$accountName' created")
             updateNotification("First-run setup complete; MariaDB is ready")
@@ -668,19 +675,24 @@ class RealmForegroundService : Service() {
 
     private fun refreshRealmNetworkSettings() {
         try {
-            val output = runAuthDatabaseQuery(
-                "SELECT address, localAddress FROM realmlist WHERE id = 1;"
+            val persistedSettings = readRealmDatabaseSettings()
+            val settings = RealmNetworkSettings(
+                realmAddress = persistedSettings.realmAddress,
+                localAddress = persistedSettings.localAddress
             )
-            val fields = output.lineSequence().firstOrNull()?.split('\t')
-            if (fields == null || fields.size != 2) {
-                throw IllegalStateException("Realm row 1 was not found")
-            }
-            val settings = RealmNetworkSettings(realmAddress = fields[0], localAddress = fields[1])
             RealmRuntime.setNetworkSettings(settings)
             RealmNetworkSettingsStore(this).save(settings)
         } catch (error: Exception) {
             RealmRuntime.appendLog("[network] Failed to load realm addresses: ${error.message}")
         }
+    }
+
+    private fun readRealmDatabaseSettings(): PersistedRealmSettings {
+        val output = runAuthDatabaseQuery(
+            "SELECT name, address, localAddress FROM realmlist WHERE id = 1;"
+        )
+        return parseRealmDatabaseSettings(output)
+            ?: throw IllegalStateException("Realm row 1 was not found or contains invalid settings")
     }
 
     private fun saveRealmNetworkSettings(realmAddress: String, localAddress: String) {
@@ -1026,6 +1038,25 @@ internal fun matchesReadinessSignal(tag: String, line: String): Boolean = when (
     "authserver" -> line.contains("BYGDOK_READY:authserver")
     "worldserver" -> line.contains("BYGDOK_READY:worldserver")
     else -> false
+}
+
+internal data class PersistedRealmSettings(
+    val realmName: String,
+    val realmAddress: String,
+    val localAddress: String
+)
+
+internal fun parseRealmDatabaseSettings(output: String): PersistedRealmSettings? {
+    val fields = output.lineSequence()
+        .map { it.split('\t') }
+        .firstOrNull { row ->
+            row.size == 3 &&
+                isValidRealmName(row[0]) &&
+                isValidRealmAddress(row[1]) &&
+                isValidRealmAddress(row[2])
+        }
+        ?: return null
+    return PersistedRealmSettings(fields[0], fields[1], fields[2])
 }
 
 internal data class RealmModuleDatabaseBootstrapBatch(

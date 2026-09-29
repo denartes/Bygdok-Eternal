@@ -2,6 +2,7 @@ package com.denartes.bygdoketernal.realm
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -14,6 +15,16 @@ class RealmForegroundServiceSchemaTest {
         assertTrue(matchesReadinessSignal("worldserver", "BYGDOK_READY:worldserver"))
         assertFalse(matchesReadinessSignal("worldserver", "Creating random bot characters"))
         assertFalse(matchesReadinessSignal("playerbots", "BYGDOK_READY:worldserver"))
+    }
+
+    @Test
+    fun `realm settings parser skips client warnings and validates the returned row`() {
+        val parsed = parseRealmDatabaseSettings(
+            "Warning: insecure passwordless login\nRealm One\t192.168.1.10\tlocalhost\n"
+        )
+
+        assertEquals(PersistedRealmSettings("Realm One", "192.168.1.10", "localhost"), parsed)
+        assertNull(parseRealmDatabaseSettings("Warning: insecure passwordless login\n"))
     }
 
     @Test
