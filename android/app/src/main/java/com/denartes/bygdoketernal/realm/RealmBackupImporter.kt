@@ -5,6 +5,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.io.InputStream
+import java.io.PushbackInputStream
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 
@@ -110,8 +111,12 @@ internal object RealmBackupImporter {
     }
 
     private fun forEachArchiveEntry(archive: File, action: (String, InputStream, Boolean) -> Unit) {
-        archive.inputStream().buffered().use { input ->
-            if (archive.name.endsWith(".tar.gz", ignoreCase = true) ||
+        archive.inputStream().buffered().use { rawInput ->
+            val input = PushbackInputStream(rawInput, 2)
+            val magic = byteArrayOf(input.read().toByte(), input.read().toByte())
+            input.unread(magic)
+            if (magic[0] == 0x1f.toByte() && magic[1] == 0x8b.toByte() ||
+                archive.name.endsWith(".tar.gz", ignoreCase = true) ||
                 archive.name.endsWith(".tgz", ignoreCase = true)
             ) {
                 TarInputStream(GZIPInputStream(input)).use { tar ->
@@ -134,15 +139,17 @@ internal object RealmBackupImporter {
     }
 
     private fun normalizeEntryPath(path: String): String {
-        require(path.isNotBlank() && !path.startsWith('/') && !path.startsWith('\\')) {
+        var candidate = path
+        while (candidate.startsWith("./")) candidate = candidate.removePrefix("./")
+        require(candidate.isNotBlank() && !candidate.startsWith('/') && !candidate.startsWith('\\')) {
             "Backup archive contains an absolute path"
         }
-        require(!path.contains('\\') && !path.contains('\u0000')) { "Backup archive contains an invalid path" }
-        val parts = path.split('/')
+        require(!candidate.contains('\\') && !candidate.contains('\u0000')) { "Backup archive contains an invalid path" }
+        val parts = candidate.split('/')
         require(parts.none { it.isBlank() || it == "." || it == ".." }) {
             "Backup archive contains an unsafe path"
         }
-        val normalized = if (parts.firstOrNull() == "bygdok-export") parts.drop(1).joinToString("/") else path
+        val normalized = if (parts.firstOrNull() == "bygdok-export") parts.drop(1).joinToString("/") else candidate
         require(normalized.isNotBlank()) { "Backup archive contains an invalid root entry" }
         return normalized
     }

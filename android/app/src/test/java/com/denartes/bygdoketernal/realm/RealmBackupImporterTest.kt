@@ -33,7 +33,11 @@ class RealmBackupImporterTest {
         try {
             GZIPOutputStream(archive.outputStream()).use { gzip ->
                 for ((name, text) in validEntries()) {
-                    writeTarEntry(gzip, name, text.toByteArray(Charsets.UTF_8))
+                    writeTarEntry(
+                        gzip,
+                        "./${name.removePrefix("bygdok-export/")}",
+                        text.toByteArray(Charsets.UTF_8)
+                    )
                 }
                 gzip.write(ByteArray(1024))
             }
