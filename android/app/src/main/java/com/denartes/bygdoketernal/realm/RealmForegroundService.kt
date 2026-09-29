@@ -25,12 +25,14 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 private data class ProcessStartupSignal(val ready: Boolean, val exitCode: Int? = null)
 
 private data class ProcessReadiness(
-    val firstSignal: CompletableDeferred<ProcessStartupSignal> = CompletableDeferred()
+    val firstSignal: CompletableDeferred<ProcessStartupSignal> = CompletableDeferred(),
+    val outputClosed: CompletableDeferred<Unit> = CompletableDeferred()
 )
 
 /**
@@ -195,7 +197,14 @@ class RealmForegroundService : Service() {
             RealmRuntime.updateState { it.copy(phase = RealmPhase.DATABASE_READY) }
             updateNotification("MariaDB ready for first-run setup")
         } catch (error: Throwable) {
-            RealmRuntime.appendLog("[setup] MariaDB startup failed: ${error.message}")
+            val nativeFailure = RealmRuntime.logLines.value
+                .lastOrNull {
+                    (it.startsWith("[mariadbd]") || it.startsWith("[mariadbd-init]")) &&
+                        !it.contains("ready for connections", ignoreCase = true) &&
+                        !it.contains("exited with code", ignoreCase = true)
+                }
+            val detail = nativeFailure?.let { "; $it" }.orEmpty()
+            RealmRuntime.appendLog("[setup] MariaDB startup failed: ${error.message}$detail")
             RealmRuntime.updateState { it.copy(phase = RealmPhase.FAILED, database = ComponentStatus.FAILED) }
             updateNotification("MariaDB failed to start")
             stopRealm(resetState = false)
@@ -984,6 +993,12 @@ class RealmForegroundService : Service() {
         val socketPath = paths.socketFile.absolutePath
         val env = builder.environment()
         env["LD_LIBRARY_PATH"] = databaseLibraryPath()
+        val versionedZlib = File(paths.mariadbLibDir, "libz.so.1")
+        if (versionedZlib.isFile) {
+            // Android may omit versioned .so names from the extracted JNI directory.
+            // Preload the bundled copy so MariaDB's DT_NEEDED(libz.so.1) resolves.
+            env["LD_PRELOAD"] = versionedZlib.absolutePath
+        }
         env["OPENSSL_MODULES"] = paths.nativeLibraryDir
         env["MYSQL_UNIX_PORT"] = socketPath
         env["MYSQL_UNIX_ADDR"] = socketPath
@@ -1004,6 +1019,8 @@ class RealmForegroundService : Service() {
                 }
             } catch (_: IOException) {
                 // Process pipes can close while the service is stopping.
+            } finally {
+                readiness.outputClosed.complete(Unit)
             }
         }
     }
@@ -1125,6 +1142,9 @@ class RealmForegroundService : Service() {
             withTimeout(watchdogMillis) { readiness.firstSignal.await() }
         } catch (error: TimeoutCancellationException) {
             throw IllegalStateException("No readiness event received from $tag before watchdog expired", error)
+        }
+        if (!signal.ready) {
+            withTimeoutOrNull(1_000) { readiness.outputClosed.await() }
         }
         check(signal.ready) { "$tag exited with code ${signal.exitCode} before readiness" }
         check(process.isAlive) { "$tag exited immediately after its readiness event" }
