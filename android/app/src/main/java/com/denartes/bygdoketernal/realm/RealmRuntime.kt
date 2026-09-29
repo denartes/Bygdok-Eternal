@@ -18,6 +18,7 @@ enum class RealmPhase {
     STARTING_DATABASE,
     DATABASE_READY,
     CONFIGURING_INITIAL_SETUP,
+    IMPORTING_REALM,
     STARTING_AUTHSERVER,
     PREPARING_CLIENT_DATA,
     STARTING_WORLDSERVER,
@@ -39,6 +40,7 @@ data class RealmState(
     val isBusy: Boolean
         get() = phase == RealmPhase.STARTING_DATABASE ||
             phase == RealmPhase.CONFIGURING_INITIAL_SETUP ||
+            phase == RealmPhase.IMPORTING_REALM ||
             phase == RealmPhase.STARTING_AUTHSERVER ||
             phase == RealmPhase.PREPARING_CLIENT_DATA ||
             phase == RealmPhase.STARTING_WORLDSERVER

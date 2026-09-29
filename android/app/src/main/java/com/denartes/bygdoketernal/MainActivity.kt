@@ -3,6 +3,7 @@ package com.denartes.bygdoketernal
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -65,6 +66,10 @@ import com.denartes.bygdoketernal.realm.isValidRealmName
 class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op: notification is optional */ }
+    private val importArchiveLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) startRealmImport(uri)
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -129,7 +134,8 @@ class MainActivity : ComponentActivity() {
                                 putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
                                 putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
                             }
-                        }
+                        },
+                        onImportRealm = ::chooseRealmImport
                     ) else InitialSetupScreen(
                         state = state,
                         onStartDatabase = {
@@ -144,7 +150,8 @@ class MainActivity : ComponentActivity() {
                                 putExtra(RealmForegroundService.EXTRA_USERNAME, username)
                                 putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
                             }
-                        }
+                        },
+                        onImportRealm = ::chooseRealmImport
                     )
                 }
             }
@@ -166,13 +173,28 @@ class MainActivity : ComponentActivity() {
             .apply(configure)
         startService(intent)
     }
+
+    private fun chooseRealmImport() {
+        importArchiveLauncher.launch(
+            arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")
+        )
+    }
+
+    private fun startRealmImport(uri: Uri) {
+        val intent = Intent(this, RealmForegroundService::class.java)
+            .setAction(RealmForegroundService.ACTION_IMPORT_REALM)
+            .setData(uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startForegroundService(intent)
+    }
 }
 
 @Composable
 private fun InitialSetupScreen(
     state: com.denartes.bygdoketernal.realm.RealmState,
     onStartDatabase: () -> Unit,
-    onComplete: (String, String, String, String, String) -> Unit
+    onComplete: (String, String, String, String, String) -> Unit,
+    onImportRealm: () -> Unit
 ) {
     val networkSettings by RealmRuntime.networkSettings.collectAsState()
     val logLines by RealmRuntime.logLines.collectAsState()
@@ -211,6 +233,11 @@ private fun InitialSetupScreen(
                     Text("START MARIADB")
                 }
             }
+            OutlinedButton(
+                onClick = onImportRealm,
+                enabled = !state.isBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("IMPORT EXISTING REALM") }
         } else {
             OutlinedTextField(
                 value = realmName,
@@ -290,7 +317,8 @@ private fun DashboardScreen(
     onSetAccountGmLevel: (String, Int) -> Unit,
     onLoadNetworkSettings: () -> Unit,
     onSaveNetworkSettings: (String, String) -> Unit,
-    onApplyNetworkSettings: (String, String) -> Unit
+    onApplyNetworkSettings: (String, String) -> Unit,
+    onImportRealm: () -> Unit
 ) {
     val state by RealmRuntime.state.collectAsState()
     val logLines by RealmRuntime.logLines.collectAsState()
@@ -313,7 +341,7 @@ private fun DashboardScreen(
     ) {
         Text("BYGDOK ETERNAL", style = MaterialTheme.typography.headlineMedium)
         TabRow(selectedTabIndex = selectedTab) {
-            listOf("Overview", "Accounts", "Network", "Console").forEachIndexed { index, title ->
+            listOf("Overview", "Accounts", "Network", "Console", "Import").forEachIndexed { index, title ->
                 Tab(
                     selected = selectedTab == index,
                     onClick = {
@@ -350,6 +378,12 @@ private fun DashboardScreen(
                 logLines = logLines,
                 enabled = state.worldserver == ComponentStatus.RUNNING,
                 onSend = onConsoleCommand,
+                modifier = Modifier.weight(1f)
+            )
+            4 -> ImportRealmPanel(
+                logLines = logLines,
+                enabled = !state.isBusy,
+                onImport = onImportRealm,
                 modifier = Modifier.weight(1f)
             )
             else -> OverviewPanel(
@@ -622,8 +656,27 @@ private fun phaseLabel(phase: RealmPhase): String = when (phase) {
     RealmPhase.STARTING_DATABASE -> "Starting database..."
     RealmPhase.DATABASE_READY -> "MariaDB ready"
     RealmPhase.CONFIGURING_INITIAL_SETUP -> "Saving setup..."
+    RealmPhase.IMPORTING_REALM -> "Importing realm..."
     RealmPhase.STARTING_AUTHSERVER -> "Starting authserver..."
     RealmPhase.PREPARING_CLIENT_DATA -> "Preparing client data..."
     RealmPhase.STARTING_WORLDSERVER -> "Starting worldserver..."
     else -> "Starting realm..."
+}
+
+@Composable
+private fun ImportRealmPanel(
+    logLines: List<String>,
+    enabled: Boolean,
+    onImport: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val importMessage = logLines.lastOrNull { it.startsWith("[import]") }
+    Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Import Realm", style = MaterialTheme.typography.titleLarge)
+        Text("Restore a Bygdok logical backup. The current realm is retained until validation succeeds.")
+        Button(onClick = onImport, enabled = enabled, modifier = Modifier.fillMaxWidth().height(54.dp)) {
+            Text("SELECT BACKUP ARCHIVE")
+        }
+        if (importMessage != null) Text(importMessage, style = MaterialTheme.typography.bodySmall)
+    }
 }

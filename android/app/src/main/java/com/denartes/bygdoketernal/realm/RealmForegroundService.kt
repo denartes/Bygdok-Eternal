@@ -90,6 +90,16 @@ class RealmForegroundService : Service() {
                 }
                 return START_STICKY
             }
+            ACTION_IMPORT_REALM -> {
+                val archiveUri = intent.data
+                if (archiveUri == null) {
+                    RealmRuntime.appendLog("[import] No backup archive was selected")
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification("Preparing realm import..."))
+                    scope.launch { importRealm(archiveUri) }
+                }
+                return START_STICKY
+            }
             ACTION_STOP -> {
                 intentionalStop = true
                 stopRealm()
@@ -190,6 +200,157 @@ class RealmForegroundService : Service() {
             updateNotification("MariaDB failed to start")
             stopRealm(resetState = false)
         }
+    }
+
+    private suspend fun importRealm(archiveUri: android.net.Uri) {
+        RealmRuntime.updateState { it.copy(phase = RealmPhase.IMPORTING_REALM) }
+        RealmRuntime.appendLog("[import] Import started; validating archive")
+        val importRoot = File(paths.root, "import")
+        val preparedDir = File(importRoot, "prepared")
+        val archive = File(importRoot, "backup.zip")
+        val previousData = File(importRoot, "previous-data")
+        val currentNetworkSettings = RealmNetworkSettingsStore(this).load()
+        val currentRealmName = RealmSetupStore(this).realmName()
+        try {
+            paths.ensureDirectories()
+            importRoot.deleteRecursively()
+            importRoot.mkdirs()
+            contentResolver.openInputStream(archiveUri).use { input ->
+                checkNotNull(input) { "Could not open selected backup" }
+                archive.outputStream().use { output -> input.copyTo(output) }
+            }
+            val prepared = RealmBackupImporter.extractAndValidate(archive, preparedDir)
+            RealmRuntime.appendLog("[import] Archive validated; stopping realm processes")
+            intentionalStop = true
+            stopProcessesOnly()
+            intentionalStop = false
+
+            renameForImport(paths.dataDir, previousData)
+            try {
+                paths.dataDir.mkdirs()
+                RealmConfigInstaller(this, paths).install()
+                startForeground(NOTIFICATION_ID, buildNotification("Restoring realm databases..."))
+                startDatabase()
+                restoreBackupDatabases(prepared)
+                markImportedDatabaseSchemas(prepared)
+                applyPortableModuleConfigs(prepared)
+                startAuthserver()
+                startWorldserver()
+                reapplyCurrentRealmConfiguration(currentRealmName, currentNetworkSettings)
+                refreshRealmNetworkSettings()
+                validateImportedRealm()
+                intentionalStop = true
+                stopProcessesOnly()
+                intentionalStop = false
+                previousData.deleteRecursively()
+                RealmSetupStore(this).markComplete(readRealmDatabaseSettings().realmName)
+                RealmRuntime.setSetupComplete(true, readRealmDatabaseSettings().realmName)
+                RealmRuntime.resetToDefault()
+                RealmRuntime.appendLog("[import] Realm import completed successfully")
+                updateNotification("Realm import complete; start the realm")
+            } catch (error: Throwable) {
+                RealmRuntime.appendLog("[import] Import failed: ${error.message}")
+                intentionalStop = true
+                stopProcessesOnly()
+                paths.dataDir.deleteRecursively()
+                renameForImport(previousData, paths.dataDir)
+                intentionalStop = false
+                RealmRuntime.resetToDefault()
+                updateNotification("Realm import failed; previous realm restored")
+            }
+        } catch (error: Throwable) {
+            RealmRuntime.appendLog("[import] Import rejected: ${error.message}")
+            updateNotification("Realm import rejected")
+        } finally {
+            importRoot.deleteRecursively()
+        }
+    }
+
+    private fun renameForImport(source: File, destination: File) {
+        if (!source.exists()) return
+        check(source.renameTo(destination)) { "Could not move realm data for import" }
+    }
+
+    private fun restoreBackupDatabases(prepared: PreparedRealmBackup) {
+        val clientBinary = File(paths.nativeLibraryDir, "libpocket_mariadb_client.so")
+        for (database in RealmBackupImporter.requiredDatabases) {
+            val dump = prepared.databases[database] ?: error("Missing prepared dump: $database")
+            RealmRuntime.appendLog("[import] Restoring $database")
+            runBlockingProcessFromFile(
+                listOf(
+                    clientBinary.absolutePath,
+                    "--no-defaults", "-h", "127.0.0.1", "-P", "3306", "-u", "root",
+                    "--database", database
+                ),
+                "import:$database",
+                dump
+            )
+        }
+    }
+
+    private fun markImportedDatabaseSchemas(prepared: PreparedRealmBackup) {
+        File(paths.dataDir, ".acore-schema-bootstrap-complete").writeText("imported backup\n")
+        for (batch in realmModuleDatabaseBootstrapFiles(File(paths.sqlDir, "modules"))) {
+            File(paths.dataDir, ".module-base-${batch.moduleName}-${batch.database}.complete")
+                .writeText("imported backup\n")
+        }
+    }
+
+    private fun applyPortableModuleConfigs(prepared: PreparedRealmBackup) {
+        for (source in prepared.moduleConfigs) {
+            val filename = source.name
+            if (!filename.matches(Regex("[A-Za-z0-9._-]+\\.conf"))) continue
+            val destination = File(paths.modulesConfigDir, filename)
+            if (!destination.isFile) {
+                RealmRuntime.appendLog("[import] Skipping config for module not bundled in APK: $filename")
+                continue
+            }
+            source.copyTo(destination, overwrite = true)
+            RealmRuntime.appendLog("[import] Applied portable module config: $filename")
+        }
+        if (prepared.moduleData.isNotEmpty()) {
+            RealmRuntime.appendLog("[import] Module data files were validated but are not auto-installed")
+        }
+    }
+
+    private fun reapplyCurrentRealmConfiguration(
+        realmName: String,
+        settings: RealmNetworkSettings
+    ) {
+        if (!isValidRealmAddress(settings.realmAddress) || !isValidRealmAddress(settings.localAddress)) {
+            RealmRuntime.appendLog("[import] No valid existing network settings; retaining imported addresses")
+            return
+        }
+        val escapedName = realmName.replace("'", "''")
+        val escapedAddress = settings.realmAddress.replace("'", "''")
+        val escapedLocal = settings.localAddress.replace("'", "''")
+        runAuthDatabaseQuery(
+            "UPDATE realmlist SET name = '$escapedName', address = '$escapedAddress', localAddress = '$escapedLocal' WHERE id = 1;"
+        )
+        RealmNetworkSettingsStore(this).save(settings)
+        RealmRuntime.setNetworkSettings(settings)
+        RealmRuntime.appendLog("[import] Reapplied APK realm name and network settings")
+    }
+
+    private fun validateImportedRealm() {
+        val settings = readRealmDatabaseSettings()
+        check(settings.realmName.isNotBlank()) { "Imported realm has no name" }
+        check(isValidRealmAddress(settings.realmAddress)) { "Imported realm address is invalid" }
+        check(isValidRealmAddress(settings.localAddress)) { "Imported local address is invalid" }
+        val output = runAuthDatabaseQuery("SELECT COUNT(*) FROM account;")
+        check(output.lineSequence().any { it.trim().toIntOrNull()?.let { count -> count > 0 } == true }) {
+            "Imported auth database contains no accounts"
+        }
+        val transmogCount = runAuthDatabaseQuery(
+            "SELECT COUNT(*) FROM acore_characters.mod_transmog_plus_appearances;"
+        )
+        val transmogTables = runAuthDatabaseQuery(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'acore_characters' AND table_name IN ('mod_transmog_plus', 'mod_transmog_plus_appearances') ORDER BY table_name;"
+        ).lineSequence().filter { it.isNotBlank() }.toList()
+        check(transmogTables.contains("mod_transmog_plus_appearances")) {
+            "Imported Transmog Plus appearance table is missing"
+        }
+        RealmRuntime.appendLog("[import] Transmog appearance rows: ${transmogCount.trim()}")
     }
 
     private fun completeInitialSetup(
@@ -748,14 +909,7 @@ class RealmForegroundService : Service() {
     }
 
     private fun stopRealm(resetState: Boolean = true) {
-        logTailJob?.cancel()
-        logTailJob = null
-        worldserverProcess?.destroyForcibly()
-        authserverProcess?.destroyForcibly()
-        mariadbProcess?.destroyForcibly()
-        worldserverProcess = null
-        authserverProcess = null
-        mariadbProcess = null
+        stopProcessesOnly()
         if (resetState) {
             RealmRuntime.updateState {
                 it.copy(
@@ -767,6 +921,17 @@ class RealmForegroundService : Service() {
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun stopProcessesOnly() {
+        logTailJob?.cancel()
+        logTailJob = null
+        val processes = listOfNotNull(worldserverProcess, authserverProcess, mariadbProcess)
+        processes.forEach { it.destroyForcibly() }
+        processes.forEach { it.waitFor() }
+        worldserverProcess = null
+        authserverProcess = null
+        mariadbProcess = null
     }
 
     private fun nativeBinary(name: String): String =
@@ -996,6 +1161,7 @@ class RealmForegroundService : Service() {
         const val ACTION_START_REALM = "com.denartes.bygdoketernal.realm.START_REALM"
         const val ACTION_START_DATABASE_ONLY = "com.denartes.bygdoketernal.realm.START_DATABASE_ONLY"
         const val ACTION_COMPLETE_INITIAL_SETUP = "com.denartes.bygdoketernal.realm.COMPLETE_INITIAL_SETUP"
+        const val ACTION_IMPORT_REALM = "com.denartes.bygdoketernal.realm.IMPORT_REALM"
         const val ACTION_CONSOLE_COMMAND = "com.denartes.bygdoketernal.realm.CONSOLE_COMMAND"
         const val ACTION_REFRESH_ACCOUNTS = "com.denartes.bygdoketernal.realm.REFRESH_ACCOUNTS"
         const val ACTION_CREATE_ACCOUNT = "com.denartes.bygdoketernal.realm.CREATE_ACCOUNT"
