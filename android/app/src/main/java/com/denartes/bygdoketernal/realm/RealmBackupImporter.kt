@@ -4,6 +4,8 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.io.InputStream
+import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 
 internal data class PreparedRealmBackup(
@@ -40,17 +42,12 @@ internal object RealmBackupImporter {
         var totalBytes = 0L
 
         try {
-            ZipInputStream(archive.inputStream().buffered()).use { zip ->
-                while (true) {
-                    val entry = zip.nextEntry ?: break
+            forEachArchiveEntry(archive) { entryName, entryStream, isDirectory ->
                     entryCount++
                     require(entryCount <= MAX_ENTRIES) { "Backup archive contains too many entries" }
-                    if (entry.isDirectory) {
-                        zip.closeEntry()
-                        continue
-                    }
+                    if (isDirectory) return@forEachArchiveEntry
 
-                    val relativePath = normalizeEntryPath(entry.name)
+                    val relativePath = normalizeEntryPath(entryName)
                     val target = File(destination, relativePath)
                     check(target.canonicalPath.startsWith(destination.canonicalPath + File.separator)) {
                         "Backup archive contains an unsafe path"
@@ -74,7 +71,7 @@ internal object RealmBackupImporter {
                     target.outputStream().buffered().use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         while (true) {
-                            val read = zip.read(buffer)
+                            val read = entryStream.read(buffer)
                             if (read < 0) break
                             entryBytes += read
                             totalBytes += read
@@ -99,8 +96,6 @@ internal object RealmBackupImporter {
                         allowedConfig -> moduleConfigs.add(target)
                         allowedModuleData -> moduleData.add(target)
                     }
-                    zip.closeEntry()
-                }
             }
 
             val missing = requiredDatabases - databases.keys
@@ -111,6 +106,30 @@ internal object RealmBackupImporter {
         } catch (error: Throwable) {
             destination.deleteRecursively()
             throw error
+        }
+    }
+
+    private fun forEachArchiveEntry(archive: File, action: (String, InputStream, Boolean) -> Unit) {
+        archive.inputStream().buffered().use { input ->
+            if (archive.name.endsWith(".tar.gz", ignoreCase = true) ||
+                archive.name.endsWith(".tgz", ignoreCase = true)
+            ) {
+                TarInputStream(GZIPInputStream(input)).use { tar ->
+                    while (true) {
+                        val entry = tar.nextEntry() ?: break
+                        action(entry.name, tar, entry.isDirectory)
+                        tar.finishEntry()
+                    }
+                }
+            } else {
+                ZipInputStream(input).use { zip ->
+                    while (true) {
+                        val entry = zip.nextEntry ?: break
+                        action(entry.name, zip, entry.isDirectory)
+                        zip.closeEntry()
+                    }
+                }
+            }
         }
     }
 
@@ -153,4 +172,79 @@ internal object RealmBackupImporter {
         require(hasCreateTable) { "$database dump contains no table definitions" }
         require(hasInsert) { "$database dump contains no data inserts" }
     }
+}
+
+private data class TarEntry(val name: String, val size: Long, val isDirectory: Boolean)
+
+private class TarInputStream(private val input: InputStream) : InputStream() {
+    private var remaining = 0L
+    private var padding = 0L
+
+    fun nextEntry(): TarEntry? {
+        finishEntry()
+        val header = ByteArray(512)
+        var read = 0
+        while (read < header.size) {
+            val count = input.read(header, read, header.size - read)
+            if (count < 0) return null
+            read += count
+        }
+        if (header.all { it == 0.toByte() }) return null
+        val name = field(header, 0, 100)
+        val prefix = field(header, 345, 155)
+        val fullName = if (prefix.isBlank()) name else "$prefix/$name"
+        val size = octalField(header, 124, 12)
+        val type = header[156].toInt().toChar()
+        remaining = size
+        padding = (512 - (size % 512)) % 512
+        return TarEntry(fullName, size, type == '5')
+    }
+
+    fun finishEntry() {
+        skipFully(remaining + padding)
+        remaining = 0L
+        padding = 0L
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (remaining == 0L) return -1
+        val requested = minOf(length.toLong(), remaining).toInt()
+        val count = input.read(buffer, offset, requested)
+        if (count < 0) return -1
+        remaining -= count
+        return count
+    }
+
+    override fun read(): Int {
+        if (remaining == 0L) return -1
+        val value = input.read()
+        if (value >= 0) remaining--
+        return value
+    }
+
+    override fun close() = input.close()
+
+    private fun skipFully(bytes: Long) {
+        var left = bytes
+        while (left > 0) {
+            val skipped = input.skip(left)
+            if (skipped > 0) {
+                left -= skipped
+            } else if (input.read() >= 0) {
+                left--
+            } else {
+                throw IllegalArgumentException("Truncated tar archive")
+            }
+        }
+    }
+
+    private fun field(bytes: ByteArray, offset: Int, length: Int): String =
+        bytes.copyOfRange(offset, offset + length)
+            .takeWhile { it != 0.toByte() }
+            .toByteArray()
+            .toString(Charsets.UTF_8)
+            .trim()
+
+    private fun octalField(bytes: ByteArray, offset: Int, length: Int): Long =
+        field(bytes, offset, length).trim().trimStart('0').ifBlank { "0" }.toLong(8)
 }
