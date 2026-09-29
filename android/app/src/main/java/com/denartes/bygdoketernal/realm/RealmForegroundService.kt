@@ -203,6 +203,7 @@ class RealmForegroundService : Service() {
     }
 
     private suspend fun importRealm(archiveUri: android.net.Uri) {
+        val stateBeforeImport = RealmRuntime.state.value
         RealmRuntime.updateState { it.copy(phase = RealmPhase.IMPORTING_REALM) }
         RealmRuntime.appendLog("[import] Import started; validating archive")
         val importRoot = File(paths.root, "import")
@@ -260,9 +261,11 @@ class RealmForegroundService : Service() {
             }
         } catch (error: Throwable) {
             RealmRuntime.appendLog("[import] Import rejected: ${error.message}")
+            RealmRuntime.updateState { stateBeforeImport }
             updateNotification("Realm import rejected")
         } finally {
             importRoot.deleteRecursively()
+            stopForeground(STOP_FOREGROUND_REMOVE)
         }
     }
 
