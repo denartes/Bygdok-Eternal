@@ -45,7 +45,7 @@ GuildMate.LoginBatchDelay = 1000
 #                  be auto-logged as Guild Mates.
 #     REQUIRED:    This must be set for the module to function.
 #     Example:     "1,2,3" - Auto-log members of guilds 1, 2, and 3
-#     To find guild IDs: SELECT id, name FROM guild;
+#     To find guild IDs: SELECT guildid, name FROM guild;
 #     Default:     "" (module will not log any characters until configured)
 #
 

@@ -17,6 +17,7 @@ import com.denartes.bygdoketernal.realm.RealmPhase
 import com.denartes.bygdoketernal.realm.RealmNetworkSettings
 import com.denartes.bygdoketernal.realm.RealmNetworkSettingsStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +27,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
 private data class ProcessStartupSignal(val ready: Boolean, val exitCode: Int? = null)
@@ -49,6 +52,7 @@ class RealmForegroundService : Service() {
 
     private val serviceJob = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.IO + serviceJob)
+    private val lifecycleMutex = Mutex()
 
     private var mariadbProcess: Process? = null
     private var authserverProcess: Process? = null
@@ -71,13 +75,13 @@ class RealmForegroundService : Service() {
             ACTION_START_REALM -> {
                 intentionalStop = false
                 startForeground(NOTIFICATION_ID, buildNotification("Starting realm..."))
-                scope.launch { startRealm() }
+                scope.launch { lifecycleMutex.withLock { startRealm() } }
                 return START_STICKY
             }
             ACTION_START_DATABASE_ONLY -> {
                 intentionalStop = false
                 startForeground(NOTIFICATION_ID, buildNotification("Starting MariaDB..."))
-                scope.launch { startDatabaseOnly() }
+                scope.launch { lifecycleMutex.withLock { startDatabaseOnly() } }
                 return START_STICKY
             }
             ACTION_COMPLETE_INITIAL_SETUP -> {
@@ -98,14 +102,38 @@ class RealmForegroundService : Service() {
                     RealmRuntime.appendLog("[import] No backup archive was selected")
                 } else {
                     startForeground(NOTIFICATION_ID, buildNotification("Preparing realm import..."))
-                    scope.launch { importRealm(archiveUri) }
+                    scope.launch { lifecycleMutex.withLock { importRealm(archiveUri) } }
                 }
                 return START_STICKY
             }
             ACTION_STOP -> {
-                intentionalStop = true
-                stopRealm()
+                if (RealmRuntime.botAccounts.value.busy) {
+                    scope.launch {
+                        lifecycleMutex.withLock {
+                            intentionalStop = true
+                            stopRealm()
+                        }
+                    }
+                } else {
+                    intentionalStop = true
+                    stopRealm()
+                }
                 return START_NOT_STICKY
+            }
+            ACTION_BOT_ACCOUNTS -> {
+                if (RealmRuntime.botAccounts.value.busy) return START_STICKY
+                RealmRuntime.setBotAccounts(RealmRuntime.botAccounts.value.copy(busy = true, error = null, message = null))
+                startForeground(NOTIFICATION_ID, buildNotification("Managing bot accounts..."))
+                scope.launch {
+                    lifecycleMutex.withLock {
+                        manageBotAccounts(
+                            intent.getStringExtra(EXTRA_OPERATION).orEmpty(),
+                            intent.getIntExtra(EXTRA_ACCOUNT_ID, 0),
+                            intent.getIntExtra(EXTRA_TARGET_ACCOUNT_ID, 0)
+                        )
+                    }
+                }
+                return START_STICKY
             }
             ACTION_CONSOLE_COMMAND -> {
                 scope.launch { sendConsoleCommand(intent.getStringExtra(EXTRA_COMMAND).orEmpty()) }
@@ -150,7 +178,7 @@ class RealmForegroundService : Service() {
             null -> {
                 intentionalStop = false
                 startForeground(NOTIFICATION_ID, buildNotification("Restoring MariaDB..."))
-                scope.launch { startDatabaseOnly() }
+                scope.launch { lifecycleMutex.withLock { startDatabaseOnly() } }
                 return START_STICKY
             }
             else -> return START_NOT_STICKY
@@ -160,11 +188,53 @@ class RealmForegroundService : Service() {
     override fun onDestroy() {
         stopRealm()
         serviceJob.cancel()
+        if (RealmRuntime.botAccounts.value.busy) {
+            val message = "Database management was interrupted. Reload before continuing."
+            RealmRuntime.appendLog("[bot-accounts] $message")
+            RealmRuntime.setBotAccounts(BotAccountState(error = message))
+        }
         super.onDestroy()
+    }
+
+    private suspend fun manageBotAccounts(operation: String, account: Int, target: Int) {
+        try {
+            check(RealmBotAccounts.canManage(
+                RealmRuntime.state.value, authserverProcess?.isAlive == true, worldserverProcess?.isAlive == true
+            )) {
+                "Stop the realm before managing bot accounts or guilds"
+            }
+            if (mariadbProcess?.isAlive != true) {
+                intentionalStop = false
+                startDatabaseOnly()
+            }
+            check(mariadbProcess?.isAlive == true && RealmRuntime.state.value.database == ComponentStatus.RUNNING) {
+                "MariaDB could not be started. See Console for details."
+            }
+            val before = RealmBotAccounts.parse(runAuthDatabaseQuery(RealmBotAccounts.snapshotQuery))
+            if (operation != RealmBotAccounts.LOAD) {
+                runAuthDatabaseQuery(RealmBotAccounts.mutation(operation, account, target, before))
+            }
+            val snapshot = if (operation == RealmBotAccounts.LOAD) before else {
+                RealmBotAccounts.parse(runAuthDatabaseQuery(RealmBotAccounts.snapshotQuery))
+            }
+            RealmBotAccounts.verify(operation, account, target, snapshot)
+            RealmRuntime.setBotAccounts(BotAccountState(snapshot = snapshot, message =
+                if (operation == RealmBotAccounts.LOAD) "Database loaded. Game servers remain stopped."
+                else "Saved. Changes take effect on the next realm start."))
+            updateNotification("MariaDB ready; game servers stopped")
+        } catch (cancelled: CancellationException) {
+            RealmRuntime.setBotAccounts(BotAccountState(error = "Bot account operation was interrupted. Reload before continuing."))
+            throw cancelled
+        } catch (error: Exception) {
+            val message = "Bot account operation failed: ${error.message}"
+            RealmRuntime.appendLog("[bot-accounts] $message")
+            RealmRuntime.setBotAccounts(BotAccountState(error = message))
+        }
     }
 
     private suspend fun startRealm() {
         try {
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_DATABASE) }
             paths.ensureDirectories()
             clearNativeLogs()
             RealmConfigInstaller(this, paths).install()
@@ -178,8 +248,8 @@ class RealmForegroundService : Service() {
         } catch (t: Throwable) {
             RealmRuntime.appendLog("[realm] Startup failed: ${t.message}")
             updateNotification("Realm failed to start")
-            RealmRuntime.resetToDefault()
             stopRealm(resetState = false)
+            RealmRuntime.resetToDefault()
         }
     }
 
@@ -189,6 +259,7 @@ class RealmForegroundService : Service() {
             return
         }
         try {
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_DATABASE) }
             paths.ensureDirectories()
             clearNativeLogs()
             RealmConfigInstaller(this, paths).install()
@@ -212,6 +283,7 @@ class RealmForegroundService : Service() {
     }
 
     private suspend fun importRealm(archiveUri: android.net.Uri) {
+        RealmRuntime.setBotAccounts(BotAccountState())
         val stateBeforeImport = RealmRuntime.state.value
         RealmRuntime.updateState { it.copy(phase = RealmPhase.IMPORTING_REALM) }
         RealmRuntime.appendLog("[import] Import started; validating archive")
@@ -243,9 +315,9 @@ class RealmForegroundService : Service() {
                 startDatabase()
                 restoreBackupDatabases(prepared)
                 markImportedDatabaseSchemas(prepared)
-                applyPortableModuleConfigs(prepared)
+                val portableModuleConfigs = portableModuleConfigs(prepared)
                 startAuthserver()
-                startWorldserver()
+                startWorldserver(portableModuleConfigs)
                 reapplyCurrentRealmConfiguration(currentRealmName, currentNetworkSettings)
                 refreshRealmNetworkSettings()
                 val importedSettings = validateImportedRealm()
@@ -308,21 +380,23 @@ class RealmForegroundService : Service() {
         }
     }
 
-    private fun applyPortableModuleConfigs(prepared: PreparedRealmBackup) {
+    private fun portableModuleConfigs(prepared: PreparedRealmBackup): Map<RealmModDefinition, String> {
+        val configs = mutableMapOf<RealmModDefinition, String>()
         for (source in prepared.moduleConfigs) {
             val filename = source.name
             if (!filename.matches(Regex("[A-Za-z0-9._-]+\\.conf"))) continue
-            val destination = File(paths.modulesConfigDir, filename)
-            if (!destination.isFile) {
+            val mod = RealmMods.all.find { it.configFile == filename }
+            if (mod == null) {
                 RealmRuntime.appendLog("[import] Skipping config for module not bundled in APK: $filename")
                 continue
             }
-            source.copyTo(destination, overwrite = true)
-            RealmRuntime.appendLog("[import] Applied portable module config: $filename")
+            configs[mod] = source.readText()
+            RealmRuntime.appendLog("[import] Applying portable config with app-saved settings taking priority: $filename")
         }
         if (prepared.moduleData.isNotEmpty()) {
             RealmRuntime.appendLog("[import] Module data files were validated but are not auto-installed")
         }
+        return configs
     }
 
     private fun reapplyCurrentRealmConfiguration(
@@ -597,6 +671,11 @@ class RealmForegroundService : Service() {
     private fun bootstrapModuleDatabaseSchemas(clientBinary: File) {
         for (batch in realmModuleDatabaseBootstrapFiles(File(paths.sqlDir, "modules"))) {
             val marker = File(paths.dataDir, ".module-base-${batch.moduleName}-${batch.database}.complete")
+            if (batch.moduleName == "mod-guild-mate" &&
+                databaseTableExists(clientBinary, batch.database, "guildmate_excluded_accounts")) {
+                marker.writeText("existing schema detected\n")
+                continue
+            }
             val validatesTransmogSchema = requiresTransmogSchemaTableCheck(batch.moduleName, batch.database)
             val transmogSchemaReady = !validatesTransmogSchema ||
                 databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")
@@ -710,7 +789,7 @@ class RealmForegroundService : Service() {
         RealmRuntime.updateState { it.copy(authserver = ComponentStatus.RUNNING) }
     }
 
-    private suspend fun startWorldserver() {
+    private suspend fun startWorldserver(portableModuleConfigs: Map<RealmModDefinition, String> = emptyMap()) {
         RealmRuntime.appendLog("[realm] Worldserver phase: launching worldserver")
         RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_WORLDSERVER) }
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.STARTING) }
@@ -725,6 +804,7 @@ class RealmForegroundService : Service() {
         }
         worldserverProcess = null
 
+        realmModConfigStore(this).install(paths.modulesConfigDir, portableModuleConfigs)
         val process = ProcessBuilder(
             nativeBinary("libworldserver.so"),
             "-c", paths.worldserverConf.absolutePath
@@ -901,7 +981,7 @@ class RealmForegroundService : Service() {
     private fun runAuthDatabaseQuery(query: String): String {
         val clientBinary = File(paths.nativeLibraryDir, "libpocket_mariadb_client.so")
         check(clientBinary.isFile) { "Embedded SQL client is unavailable" }
-        val process = ProcessBuilder(
+        val builder = ProcessBuilder(
             clientBinary.absolutePath,
             "--no-defaults",
             "-h", "127.0.0.1",
@@ -913,12 +993,8 @@ class RealmForegroundService : Service() {
             "-e", query
         )
             .directory(paths.root)
-            .redirectErrorStream(true)
             .also { configureMysqlEnvironment(it) }
-            .start()
-        val output = process.inputStream.bufferedReader().use { it.readText() }
-        check(process.waitFor() == 0) { output.ifBlank { "MariaDB query failed" } }
-        return output
+        return runRealmDatabaseQuery(builder, cacheDir) { RealmRuntime.appendLog("[database-client] $it") }
     }
 
     private fun stopRealm(resetState: Boolean = true) {
@@ -926,6 +1002,7 @@ class RealmForegroundService : Service() {
         if (resetState) {
             RealmRuntime.updateState {
                 it.copy(
+                    phase = RealmPhase.IDLE,
                     database = ComponentStatus.STOPPED,
                     authserver = ComponentStatus.STOPPED,
                     worldserver = ComponentStatus.STOPPED
@@ -1188,6 +1265,10 @@ class RealmForegroundService : Service() {
         const val ACTION_IMPORT_REALM = "com.denartes.bygdoketernal.realm.IMPORT_REALM"
         const val ACTION_CONSOLE_COMMAND = "com.denartes.bygdoketernal.realm.CONSOLE_COMMAND"
         const val ACTION_REFRESH_ACCOUNTS = "com.denartes.bygdoketernal.realm.REFRESH_ACCOUNTS"
+        const val ACTION_BOT_ACCOUNTS = "com.denartes.bygdoketernal.realm.BOT_ACCOUNTS"
+        const val EXTRA_OPERATION = "operation"
+        const val EXTRA_ACCOUNT_ID = "accountId"
+        const val EXTRA_TARGET_ACCOUNT_ID = "targetAccountId"
         const val ACTION_CREATE_ACCOUNT = "com.denartes.bygdoketernal.realm.CREATE_ACCOUNT"
         const val ACTION_SET_ACCOUNT_GM_LEVEL = "com.denartes.bygdoketernal.realm.SET_ACCOUNT_GM_LEVEL"
         const val ACTION_LOAD_NETWORK_SETTINGS = "com.denartes.bygdoketernal.realm.LOAD_NETWORK_SETTINGS"

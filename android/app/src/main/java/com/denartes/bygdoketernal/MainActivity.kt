@@ -11,19 +11,32 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -34,10 +47,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -45,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -63,6 +76,13 @@ import com.denartes.bygdoketernal.realm.RealmSetupStore
 import com.denartes.bygdoketernal.realm.isValidRealmAddress
 import com.denartes.bygdoketernal.realm.isValidRealmName
 
+private val RealmGold = Color(0xFFE0B44F)
+private val RealmBackground = Color(0xFF070C10)
+private val RealmSurface = Color(0xFF0D151B)
+private val RealmSurfaceRaised = Color(0xFF111D25)
+private val RealmOutline = Color(0xFF1C2B34)
+private val RealmMuted = Color(0xFF91A5B3)
+
 class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op: notification is optional */ }
@@ -80,79 +100,93 @@ class MainActivity : ComponentActivity() {
         val setupStore = RealmSetupStore(this)
         RealmRuntime.setSetupComplete(setupStore.isComplete(), setupStore.realmName())
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    val state by RealmRuntime.state.collectAsState()
-                    val setupComplete by RealmRuntime.setupComplete.collectAsState()
-                    if (setupComplete) DashboardScreen(
-                        onStart = {
-                            RealmRuntime.beginStart()
-                            startForegroundService(
-                                Intent(this, RealmForegroundService::class.java)
-                                    .setAction(RealmForegroundService.ACTION_START_REALM)
-                            )
-                        },
-                        onStop = {
-                            RealmRuntime.resetToDefault()
-                            startService(
-                                Intent(this, RealmForegroundService::class.java)
-                                    .setAction(RealmForegroundService.ACTION_STOP)
-                            )
-                        },
-                        onConsoleCommand = { command ->
-                            sendRealmAction(RealmForegroundService.ACTION_CONSOLE_COMMAND) {
-                                putExtra(RealmForegroundService.EXTRA_COMMAND, command)
-                            }
-                        },
-                        onRefreshAccounts = {
-                            sendRealmAction(RealmForegroundService.ACTION_REFRESH_ACCOUNTS)
-                        },
-                        onCreateAccount = { username, password, makeGm ->
-                            sendRealmAction(RealmForegroundService.ACTION_CREATE_ACCOUNT) {
-                                putExtra(RealmForegroundService.EXTRA_USERNAME, username)
-                                putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
-                                putExtra(RealmForegroundService.EXTRA_GM, makeGm)
-                            }
-                        },
-                        onSetAccountGmLevel = { username, gmLevel ->
-                            sendRealmAction(RealmForegroundService.ACTION_SET_ACCOUNT_GM_LEVEL) {
-                                putExtra(RealmForegroundService.EXTRA_USERNAME, username)
-                                putExtra(RealmForegroundService.EXTRA_GM_LEVEL, gmLevel)
-                            }
-                        },
-                        onLoadNetworkSettings = {
-                            sendRealmAction(RealmForegroundService.ACTION_LOAD_NETWORK_SETTINGS)
-                        },
-                        onSaveNetworkSettings = { realmAddress, localAddress ->
-                            networkSettingsStore.save(
-                                RealmNetworkSettings(realmAddress, localAddress)
-                            )
-                            RealmRuntime.setNetworkSettings(RealmNetworkSettings(realmAddress, localAddress))
-                        },
-                        onApplyNetworkSettings = { realmAddress, localAddress ->
-                            sendRealmAction(RealmForegroundService.ACTION_SAVE_NETWORK_SETTINGS) {
-                                putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
-                                putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
-                            }
-                        },
-                        onImportRealm = ::chooseRealmImport
-                    ) else InitialSetupScreen(
-                        state = state,
-                        onStartDatabase = {
-                            RealmRuntime.beginDatabaseOnlyStart()
-                            sendRealmAction(RealmForegroundService.ACTION_START_DATABASE_ONLY)
-                        },
-                        onComplete = { realmName, realmAddress, localAddress, username, password ->
-                            sendRealmAction(RealmForegroundService.ACTION_COMPLETE_INITIAL_SETUP) {
-                                putExtra(RealmForegroundService.EXTRA_REALM_NAME, realmName)
-                                putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
-                                putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
-                                putExtra(RealmForegroundService.EXTRA_USERNAME, username)
-                                putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
-                            }
-                        },
-                        onImportRealm = ::chooseRealmImport
-                    )
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = RealmGold,
+                    onPrimary = Color(0xFF211707),
+                    secondary = Color(0xFF72B8E9),
+                    background = RealmBackground,
+                    surface = RealmSurface,
+                    surfaceVariant = RealmSurfaceRaised,
+                    onSurface = Color(0xFFE6EDF2),
+                    onSurfaceVariant = RealmMuted,
+                    outline = RealmOutline,
+                    error = Color(0xFFCF6559)
+                )
+            ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = RealmBackground) {
+                    Box(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+                        val state by RealmRuntime.state.collectAsState()
+                        val setupComplete by RealmRuntime.setupComplete.collectAsState()
+                        if (setupComplete) DashboardScreen(
+                            onStart = {
+                                RealmRuntime.beginStart()
+                                startForegroundService(
+                                    Intent(this@MainActivity, RealmForegroundService::class.java)
+                                        .setAction(RealmForegroundService.ACTION_START_REALM)
+                                )
+                            },
+                            onStop = {
+                                startService(
+                                    Intent(this@MainActivity, RealmForegroundService::class.java)
+                                        .setAction(RealmForegroundService.ACTION_STOP)
+                                )
+                            },
+                            onConsoleCommand = { command ->
+                                sendRealmAction(RealmForegroundService.ACTION_CONSOLE_COMMAND) {
+                                    putExtra(RealmForegroundService.EXTRA_COMMAND, command)
+                                }
+                            },
+                            onRefreshAccounts = {
+                                sendRealmAction(RealmForegroundService.ACTION_REFRESH_ACCOUNTS)
+                            },
+                            onCreateAccount = { username, password, makeGm ->
+                                sendRealmAction(RealmForegroundService.ACTION_CREATE_ACCOUNT) {
+                                    putExtra(RealmForegroundService.EXTRA_USERNAME, username)
+                                    putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
+                                    putExtra(RealmForegroundService.EXTRA_GM, makeGm)
+                                }
+                            },
+                            onSetAccountGmLevel = { username, gmLevel ->
+                                sendRealmAction(RealmForegroundService.ACTION_SET_ACCOUNT_GM_LEVEL) {
+                                    putExtra(RealmForegroundService.EXTRA_USERNAME, username)
+                                    putExtra(RealmForegroundService.EXTRA_GM_LEVEL, gmLevel)
+                                }
+                            },
+                            onLoadNetworkSettings = {
+                                sendRealmAction(RealmForegroundService.ACTION_LOAD_NETWORK_SETTINGS)
+                            },
+                            onSaveNetworkSettings = { realmAddress, localAddress ->
+                                networkSettingsStore.save(
+                                    RealmNetworkSettings(realmAddress, localAddress)
+                                )
+                                RealmRuntime.setNetworkSettings(RealmNetworkSettings(realmAddress, localAddress))
+                            },
+                            onApplyNetworkSettings = { realmAddress, localAddress ->
+                                sendRealmAction(RealmForegroundService.ACTION_SAVE_NETWORK_SETTINGS) {
+                                    putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
+                                    putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
+                                }
+                            },
+                            onImportRealm = ::chooseRealmImport
+                        ) else InitialSetupScreen(
+                            state = state,
+                            onStartDatabase = {
+                                RealmRuntime.beginDatabaseOnlyStart()
+                                sendRealmAction(RealmForegroundService.ACTION_START_DATABASE_ONLY)
+                            },
+                            onComplete = { realmName, realmAddress, localAddress, username, password ->
+                                sendRealmAction(RealmForegroundService.ACTION_COMPLETE_INITIAL_SETUP) {
+                                    putExtra(RealmForegroundService.EXTRA_REALM_NAME, realmName)
+                                    putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
+                                    putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
+                                    putExtra(RealmForegroundService.EXTRA_USERNAME, username)
+                                    putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
+                                }
+                            },
+                            onImportRealm = ::chooseRealmImport
+                        )
+                    }
                 }
             }
         }
@@ -331,7 +365,10 @@ private fun DashboardScreen(
     val logLines by RealmRuntime.logLines.collectAsState()
     val accounts by RealmRuntime.accounts.collectAsState()
     val networkSettings by RealmRuntime.networkSettings.collectAsState()
+    val botAccountState by RealmRuntime.botAccounts.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(0) }
+    var unsavedMods by rememberSaveable { mutableStateOf(false) }
+    val tabState = rememberSaveableStateHolder()
 
     LaunchedEffect(state.database) {
         if (state.database == ComponentStatus.RUNNING) onLoadNetworkSettings()
@@ -340,66 +377,120 @@ private fun DashboardScreen(
         if (state.worldserver == ComponentStatus.RUNNING) onRefreshAccounts()
     }
 
+    fun selectTab(index: Int) {
+        selectedTab = index
+        if (index == 1 && state.worldserver == ComponentStatus.RUNNING) onRefreshAccounts()
+        if (index == 2 && state.database == ComponentStatus.RUNNING) onLoadNetworkSettings()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 20.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .background(RealmBackground)
     ) {
-        Text("BYGDOK ETERNAL", style = MaterialTheme.typography.headlineMedium)
-        TabRow(selectedTabIndex = selectedTab) {
-            listOf("Overview", "Accounts", "Network", "Console", "Import").forEachIndexed { index, title ->
-                Tab(
-                    selected = selectedTab == index,
-                    onClick = {
-                        selectedTab = index
-                        if (index == 1 && state.worldserver == ComponentStatus.RUNNING) onRefreshAccounts()
-                        if (index == 2 && state.database == ComponentStatus.RUNNING) onLoadNetworkSettings()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(48.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(RealmGold.copy(alpha = 0.14f))
+                    .border(1.dp, RealmGold.copy(alpha = 0.4f), RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("B", color = RealmGold, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            }
+            Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+                Text("BYGDOK", color = RealmGold, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("AzerothCore · 3.3.5a", color = RealmMuted, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = { selectTab(2) }) {
+                Text("⚙", color = RealmMuted, style = MaterialTheme.typography.headlineSmall)
+            }
+        }
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            when (selectedTab) {
+                1 -> AccountsPanel(
+                    accounts = accounts,
+                    enabled = state.worldserver == ComponentStatus.RUNNING,
+                    onRefresh = onRefreshAccounts,
+                    onCreate = onCreateAccount,
+                    onSetGmLevel = onSetAccountGmLevel,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                2 -> NetworkPanel(
+                    settings = networkSettings,
+                    databaseRunning = state.database == ComponentStatus.RUNNING,
+                    onReload = onLoadNetworkSettings,
+                    onSave = { realmAddress, localAddress ->
+                        onSaveNetworkSettings(realmAddress, localAddress)
+                        if (state.database == ComponentStatus.RUNNING) {
+                            onApplyNetworkSettings(realmAddress, localAddress)
+                        }
                     },
-                    text = { Text(title) }
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                3 -> ConsolePanel(
+                    logLines = logLines,
+                    enabled = state.worldserver == ComponentStatus.RUNNING,
+                    onSend = onConsoleCommand,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                4 -> ImportRealmPanel(
+                    logLines = logLines,
+                    enabled = !state.isBusy && !botAccountState.busy,
+                    onImport = onImportRealm,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                5 -> tabState.SaveableStateProvider("mods") {
+                    ModsScreen(
+                        editable = state.canEditMods,
+                        onEditingChanged = { unsavedMods = it },
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                else -> OverviewPanel(
+                    state = state,
+                    logLines = logLines,
+                    managementBusy = botAccountState.busy,
+                    onStart = { if (!botAccountState.busy) { if (unsavedMods) selectTab(5) else onStart() } },
+                    onStop = { if (!botAccountState.busy) onStop() },
+                    modifier = Modifier.fillMaxSize()
                 )
             }
         }
-        when (selectedTab) {
-            1 -> AccountsPanel(
-                accounts = accounts,
-                enabled = state.worldserver == ComponentStatus.RUNNING,
-                onRefresh = onRefreshAccounts,
-                onCreate = onCreateAccount,
-                onSetGmLevel = onSetAccountGmLevel,
-                modifier = Modifier.weight(1f)
-            )
-            2 -> NetworkPanel(
-                settings = networkSettings,
-                databaseRunning = state.database == ComponentStatus.RUNNING,
-                onReload = onLoadNetworkSettings,
-                onSave = { realmAddress, localAddress ->
-                    onSaveNetworkSettings(realmAddress, localAddress)
-                    if (state.database == ComponentStatus.RUNNING) {
-                        onApplyNetworkSettings(realmAddress, localAddress)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(RealmSurface)
+                .border(width = 1.dp, color = RealmOutline)
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf("⌂" to "Home", "▤" to "Accounts", "◎" to "Network", ">_" to "Console", "⇧" to "Import", "+" to "Mods")
+                .forEachIndexed { index, (icon, label) ->
+                    val selected = selectedTab == index
+                    TextButton(
+                        onClick = { selectTab(index) },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(icon, color = if (selected) RealmGold else RealmMuted, style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                label,
+                                color = if (selected) RealmGold else RealmMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
-                },
-                modifier = Modifier.weight(1f)
-            )
-            3 -> ConsolePanel(
-                logLines = logLines,
-                enabled = state.worldserver == ComponentStatus.RUNNING,
-                onSend = onConsoleCommand,
-                modifier = Modifier.weight(1f)
-            )
-            4 -> ImportRealmPanel(
-                logLines = logLines,
-                enabled = !state.isBusy,
-                onImport = onImportRealm,
-                modifier = Modifier.weight(1f)
-            )
-            else -> OverviewPanel(
-                state = state,
-                logLines = logLines,
-                onStart = onStart,
-                onStop = onStop,
-                modifier = Modifier.weight(1f)
-            )
+                }
         }
     }
 }
@@ -461,25 +552,71 @@ private fun NetworkPanel(
 private fun OverviewPanel(
     state: com.denartes.bygdoketernal.realm.RealmState,
     logLines: List<String>,
+    managementBusy: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val logListState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
-
-    LaunchedEffect(logLines) {
-        if (logLines.isNotEmpty()) logListState.scrollToItem(logLines.lastIndex)
-    }
-
-    Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatusCard("Database", state.database)
-        StatusCard("Authserver", state.authserver)
-        StatusCard("Worldserver", state.worldserver)
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(222.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(Color(0xFF51251C), Color(0xFF201A20), Color(0xFF101A20))
+                    )
+                )
+                .border(1.dp, RealmOutline, RoundedCornerShape(16.dp)),
+            contentAlignment = Alignment.BottomStart
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD070C10))))
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.Bottom
+            ) {
+                Text("WORLD ARTWORK PLACEHOLDER", color = RealmGold, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("Azeroth awaits", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("BYGDOK ETERNAL · SINGLE-PLAYER REALM", color = RealmMuted, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Card(
+                modifier = Modifier.weight(1f).heightIn(min = 100.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = RealmSurface)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("REALM", color = RealmMuted, style = MaterialTheme.typography.labelMedium)
+                    Text(if (state.isRunning) "Online" else "Offline", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    Text(if (state.isRunning) "Server is running" else "Server is stopped", color = RealmMuted, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Card(
+                modifier = Modifier.weight(1f).heightIn(min = 100.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = RealmSurface)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("CURRENT STATUS", color = RealmMuted, style = MaterialTheme.typography.labelMedium)
+                    Text(statusLabel(state.worldserver), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(if (state.isBusy) phaseLabel(state.phase) else "Worldserver", color = RealmMuted, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
         Button(
             onClick = if (state.isRunning) onStop else onStart,
-            enabled = !state.isBusy,
-            modifier = Modifier.fillMaxWidth().height(54.dp),
+            enabled = !state.isBusy && !managementBusy,
+            modifier = Modifier.fillMaxWidth().height(58.dp),
             colors = if (state.isRunning) {
                 ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
             } else {
@@ -495,16 +632,38 @@ private fun OverviewPanel(
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(phaseLabel(state.phase))
             } else {
-                Text(if (state.isRunning) "STOP REALM" else "START REALM")
+                Text(if (state.isRunning) "STOP SERVER" else "START SERVER", fontWeight = FontWeight.Bold)
+            }
+        }
+        if (!state.isRunning && state.database == ComponentStatus.RUNNING) {
+            TextButton(onClick = onStop, enabled = !state.isBusy && !managementBusy) {
+                Text("Stop database")
             }
         }
         Card(
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = RealmSurface)
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Server Log", style = MaterialTheme.typography.titleLarge)
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("SERVER COMPONENTS", color = RealmMuted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Text("3", color = RealmGold, style = MaterialTheme.typography.labelMedium)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                StatusLine("Database (MariaDB)", state.database)
+                StatusLine("Authserver", state.authserver)
+                StatusLine("Worldserver", state.worldserver)
+            }
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = RealmSurface)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("LATEST ACTIVITY", color = RealmMuted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     TextButton(
                         onClick = {
                             val exportedLog = logLines.joinToString("\n")
@@ -514,12 +673,42 @@ private fun OverviewPanel(
                             }
                         },
                         enabled = logLines.isNotEmpty()
-                    ) { Text("COPY LOG") }
+                    ) { Text("COPY LOG", color = RealmGold) }
                 }
-                LazyColumn(state = logListState, modifier = Modifier.fillMaxSize()) {
-                    items(logLines) { line -> Text(text = line, style = MaterialTheme.typography.bodySmall) }
+                if (logLines.isEmpty()) {
+                    Text("No server activity yet", color = RealmMuted, style = MaterialTheme.typography.bodySmall)
+                } else {
+                    logLines.takeLast(3).forEach { line ->
+                        Text(
+                            text = line,
+                            color = RealmMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StatusLine(label: String, status: ComponentStatus) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Box(
+                modifier = Modifier
+                    .width(8.dp)
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(50.dp))
+                    .background(if (status == ComponentStatus.RUNNING) Color(0xFF55C98A) else RealmMuted)
+            )
+            Text(statusLabel(status), color = RealmMuted, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -536,8 +725,16 @@ private fun AccountsPanel(
     var username by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var makeGm by rememberSaveable { mutableStateOf(false) }
+    var botManagement by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TextButton(onClick = { botManagement = !botManagement }) {
+            Text(if (botManagement) "Back to account creation / GM controls" else "Bot links / Guild Mate exclusions")
+        }
+        if (botManagement) {
+            BotAccountsScreen(Modifier.weight(1f))
+            return@Column
+        }
         Text("Accounts", style = MaterialTheme.typography.titleLarge)
         OutlinedTextField(
             value = username,

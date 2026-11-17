@@ -1,0 +1,80 @@
+{
+  "modules": [
+    {
+      "name": "mod-account-achievements",
+      "upstream": "https://github.com/azerothcore/mod-account-achievements",
+      "commit": "bfbe3677635feeef823057964e028e023633115a"
+    },
+    {
+      "name": "mod-aoe-loot",
+      "upstream": "https://github.com/azerothcore/mod-aoe-loot",
+      "commit": "1efc29f0934fc55964e97aba85cc741a67f1aade"
+    },
+    {
+      "name": "mod-ah-bot-plus",
+      "build_name": "mod-ah-bot",
+      "upstream": "https://github.com/NathanHandley/mod-ah-bot-plus",
+      "commit": "2207277278627fe61607ac7d3caa6c36bbd738ad"
+    },
+    {
+      "name": "mod-duel-reset",
+      "upstream": "https://github.com/azerothcore/mod-duel-reset",
+      "commit": "8fc67b6baa16cf20d6322b3710f82110dc9ee20b"
+    },
+    {
+      "name": "mod-emblem-transfer",
+      "upstream": "https://github.com/azerothcore/mod-emblem-transfer",
+      "commit": "5d9d0d9ff8c8b80fb33f6615f046b979d5efccb4"
+    },
+    {
+      "name": "mod-guildhouse",
+      "upstream": "https://github.com/azerothcore/mod-guildhouse",
+      "commit": "23b86dcc78471c50c60b3fc27e07e4cda8a3e200"
+    },
+    {
+      "name": "mod-instance-reset",
+      "upstream": "https://github.com/azerothcore/mod-instance-reset",
+      "commit": "42ddc011dd6836ad662774472b0b214d32c3ea31"
+    },
+    {
+      "name": "mod-npc-enchanter",
+      "upstream": "https://github.com/azerothcore/mod-npc-enchanter",
+      "commit": "0c34e45a534d6335732f778eb15eb68bba7f8055"
+    },
+    {
+      "name": "mod-reagent-bank",
+      "upstream": "https://github.com/ZhengPeiRu21/mod-reagent-bank",
+      "commit": "eceb91d636f56289f8720eea6d3c7e24db07bd43"
+    },
+    {
+      "name": "mod-playerbots",
+      "upstream": "https://github.com/liyunfan1223/mod-playerbots",
+      "commit": "df3c44419de4ec447b1d73de180d3753f3bd8f4c"
+    },
+    {
+      "name": "mod-player-bot-level-brackets",
+      "upstream": "https://github.com/DustinHendrickson/mod-player-bot-level-brackets",
+      "commit": "12aac35118c928e423708902f596e961456191c3"
+    },
+    {
+      "name": "mod-individual-progression",
+      "upstream": "https://github.com/ZhengPeiRu21/mod-individual-progression",
+      "commit": "ad2e8e4536275126d55732255e02ac5fd8533b64"
+    },
+    {
+      "name": "mod-guild-mate",
+      "origin": "Bygdok Eternal; maintained in this repository"
+    },
+    {
+      "name": "mod-transmog-plus",
+      "upstream": "https://github.com/Stefan2102/mod-transmog-plus",
+      "commit": "fd599bae2a3cc0718ee403d6d6fe0b4cb11d57c3",
+      "origin": "Locally modified baseline; maintained in this repository"
+    },
+    {
+      "name": "mod-ollama-chat",
+      "upstream": "https://github.com/DustinHendrickson/mod-ollama-chat",
+      "origin": "Existing local snapshot; original upstream commit not recorded"
+    }
+  ]
+}

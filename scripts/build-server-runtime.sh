@@ -62,31 +62,9 @@ for patch_file in "$REPO_DIR"/patches/azerothcore-android/*.patch; do
     fi
 done
 
-# Reuse the locked module list from the known-good Termux build script. Always
-# runs, even on a cache hit, so a partial/stale cached checkout can't silently
-# leave a pinned module missing (and its script loader symbol undefined).
-mkdir -p "$CORE_DIR/modules"
-sed -n '/^MODULES=(/,/^)/p' "$REPO_DIR/wowsp_cutoff.sh" \
-    | grep '"https://' \
-    | sed -E 's/.*"(https:[^"]+) ([0-9a-f]+)".*/\1|\2/' \
-    | while IFS='|' read -r repository commit; do
-        name="$(basename "$repository" .git)"
-        # At its pinned commit, mod-ah-bot-plus's script loader only defines
-        # Addmod_ah_botScripts(), so it must be staged under the "mod-ah-bot"
-        # directory name for AzerothCore's generated loader call to resolve.
-        if [ "$name" = "mod-ah-bot-plus" ]; then
-            name="mod-ah-bot"
-        fi
-        if [ -d "$CORE_DIR/modules/$name/.git" ]; then
-            current_commit="$(git -C "$CORE_DIR/modules/$name" rev-parse HEAD)"
-            if [ "$current_commit" = "$commit" ]; then
-                continue
-            fi
-        fi
-        rm -rf "$CORE_DIR/modules/$name"
-        git clone "$repository" "$CORE_DIR/modules/$name"
-        git -C "$CORE_DIR/modules/$name" checkout --detach "$commit"
-      done
+# Always replace generated module copies so local edits and removals also
+# take effect when reusing an existing server build directory.
+python3 "$REPO_DIR/scripts/stage-server-modules.py" "$CORE_DIR/modules"
 
 # Match the Boost compatibility patch used by wowsp_cutoff.sh.
 BOOST_CMAKE="$CORE_DIR/deps/boost/CMakeLists.txt"
@@ -99,13 +77,6 @@ if [ "$cmake_major" -gt 3 ] || { [ "$cmake_major" -eq 3 ] && [ "$cmake_minor" -g
 else
     sed -i '/cmake_policy(SET CMP0167 OLD)/d' "$BOOST_CMAKE"
 fi
-
-# Build the modules maintained in this monorepo from the same commit.
-for module in "$REPO_DIR"/modules/*; do
-    test -d "$module" || continue
-    rm -rf "$CORE_DIR/modules/$(basename "$module")"
-    cp -R "$module" "$CORE_DIR/modules/"
-done
 
 export PATH="$ANDROID_MYSQL_ROOT/bin:$PATH"
 export MYSQL_HOME="$ANDROID_MYSQL_ROOT"
@@ -164,6 +135,7 @@ cmake --build "$BUILD_DIR" --parallel
 cmake --install "$BUILD_DIR"
 
 mkdir -p "$OUTPUT_DIR/bin" "$OUTPUT_DIR/lib" "$OUTPUT_DIR/sql" "$OUTPUT_DIR/share"
+cp "$REPO_DIR/modules/manifest.json" "$OUTPUT_DIR/modules.json"
 cp "$INSTALL_DIR/bin/authserver" "$OUTPUT_DIR/bin/"
 cp "$INSTALL_DIR/bin/worldserver" "$OUTPUT_DIR/bin/"
 

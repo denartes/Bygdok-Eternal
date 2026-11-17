@@ -44,6 +44,11 @@ data class RealmState(
             phase == RealmPhase.STARTING_AUTHSERVER ||
             phase == RealmPhase.PREPARING_CLIENT_DATA ||
             phase == RealmPhase.STARTING_WORLDSERVER
+
+    val canEditMods: Boolean
+        get() = !isBusy &&
+            authserver !in listOf(ComponentStatus.STARTING, ComponentStatus.RUNNING) &&
+            worldserver !in listOf(ComponentStatus.STARTING, ComponentStatus.RUNNING)
 }
 
 data class RealmAccount(
@@ -103,6 +108,7 @@ class RealmSetupStore(context: Context) {
 /** In-process shared state between [RealmForegroundService] and the dashboard UI. */
 object RealmRuntime {
     private const val MAX_LOG_LINES = 500
+    private val modSettingsLock = Any()
 
     private val _state = MutableStateFlow(RealmState())
     val state = _state.asStateFlow()
@@ -122,8 +128,22 @@ object RealmRuntime {
     private val _realmName = MutableStateFlow("AzerothCore")
     val realmName = _realmName.asStateFlow()
 
+    private val _botAccounts = MutableStateFlow(BotAccountState())
+    val botAccounts = _botAccounts.asStateFlow()
+
+    fun setBotAccounts(state: BotAccountState) {
+        _botAccounts.value = state
+    }
+
     fun updateState(transform: (RealmState) -> RealmState) {
-        _state.update(transform)
+        synchronized(modSettingsLock) { _state.update(transform) }
+    }
+
+    fun editModSettings(action: () -> Unit) {
+        synchronized(modSettingsLock) {
+            check(_state.value.canEditMods) { "Stop the server before changing mods" }
+            action()
+        }
     }
 
     fun setAccounts(accounts: List<RealmAccount>) {
@@ -141,22 +161,26 @@ object RealmRuntime {
 
     fun beginDatabaseOnlyStart() {
         clearLog()
-        _state.value = RealmState(
-            phase = RealmPhase.STARTING_DATABASE,
-            database = ComponentStatus.STARTING
-        )
+        updateState {
+            RealmState(
+                phase = RealmPhase.STARTING_DATABASE,
+                database = ComponentStatus.STARTING
+            )
+        }
     }
 
     fun beginStart() {
         clearLog()
-        _state.value = RealmState(
-            phase = RealmPhase.STARTING_DATABASE,
-            database = ComponentStatus.STARTING
-        )
+        updateState {
+            RealmState(
+                phase = RealmPhase.STARTING_DATABASE,
+                database = ComponentStatus.STARTING
+            )
+        }
     }
 
     fun resetToDefault() {
-        _state.value = RealmState()
+        updateState { RealmState() }
     }
 
     fun appendLog(line: String) {

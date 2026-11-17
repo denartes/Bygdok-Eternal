@@ -9,8 +9,10 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +76,29 @@ def write_verified(archive: zipfile.ZipFile, member: str, target: Path, expected
     target.chmod(0o755)
 
 
+def retry_windows_file_operation(operation: Callable[[], object], description: str) -> None:
+    for attempt in range(6):
+        try:
+            operation()
+            return
+        except OSError as error:
+            if getattr(error, "winerror", None) not in (5, 32, 33, 145):
+                raise
+            if attempt == 5:
+                raise RuntimeError(
+                    f"{description} failed after 6 attempts. Close programs using the runtime "
+                    "directory (including terminals opened inside it) and retry the build."
+                ) from error
+            delay = 0.2 * (2 ** attempt)
+            print(f"[provider] {description}: Windows file access error; retrying in {delay:.1f}s", file=sys.stderr)
+            time.sleep(delay)
+
+
+def remove_directory(directory: Path) -> None:
+    if directory.exists():
+        retry_windows_file_operation(lambda: shutil.rmtree(directory), f"Removing {directory}")
+
+
 def main() -> int:
     apk = download()
     with zipfile.ZipFile(apk) as archive:
@@ -84,7 +109,7 @@ def main() -> int:
             raise RuntimeError("unexpected Pocket Realm MariaDB provider identity")
 
         staging = OUTPUT.with_name(OUTPUT.name + ".staging")
-        shutil.rmtree(staging, ignore_errors=True)
+        remove_directory(staging)
         (staging / "bin").mkdir(parents=True)
         (staging / "lib").mkdir()
         (staging / "share").mkdir()
@@ -138,8 +163,8 @@ def main() -> int:
         (staging / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
         (staging / ".build-complete").write_text("complete\n", encoding="ascii")
 
-        shutil.rmtree(OUTPUT, ignore_errors=True)
-        staging.replace(OUTPUT)
+        remove_directory(OUTPUT)
+        retry_windows_file_operation(lambda: staging.replace(OUTPUT), f"Publishing provider to {OUTPUT}")
 
     print(f"Staged {PROVIDER_ID} at {OUTPUT}")
     print(f"  executables: {len(list((OUTPUT / 'bin').iterdir()))}")

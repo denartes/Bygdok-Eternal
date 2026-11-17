@@ -32,7 +32,7 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
                 ?: line
         }
         File(paths.etcDir, "my.cnf").writeText("[mysqld]\nversion=8.0.36\n")
-        copyAssetTreeIfPresent("modules", paths.modulesConfigDir)
+        realmModConfigStore(context).install(paths.modulesConfigDir)
         copyAssetTreeIfPresent("sql", paths.sqlDir)
         copyAssetTreeIfPresent("mariadb-share", paths.mariadbBaseDir)
         paths.mariadbLibDir.deleteRecursively()

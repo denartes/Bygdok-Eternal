@@ -1,5 +1,11 @@
 [worldserver]
 
+# EmblemTransfer.Enable
+# Enable all emblem transfer and retrieval interactions.
+# Disabling preserves NPCs and pending transfers.
+# Default: 1 - Enabled (0 - Disabled)
+EmblemTransfer.Enable = 1
+
 #
 # Minimum amount of emblems to be transfered
 # default: 10

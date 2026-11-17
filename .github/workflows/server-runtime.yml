@@ -114,7 +114,7 @@ jobs:
           path: |
             ${{ env.CORE_DIR }}
             ${{ env.BUILD_DIR }}
-          key: server-build-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.ANDROID_API }}-${{ env.ANDROID_ABI }}-${{ hashFiles('wowsp_cutoff.sh', 'scripts/build-server-runtime.sh', 'scripts/build-android-deps.sh', 'scripts/build-mariadb-runtime.sh', 'patches/azerothcore-android/**', 'patches/mariadb-10.11.9/**', 'modules/**', 'configs/**') }}
+          key: server-build-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.ANDROID_API }}-${{ env.ANDROID_ABI }}-${{ hashFiles('scripts/build-server-runtime.sh', 'scripts/stage-server-modules.py', 'scripts/build-android-deps.sh', 'scripts/build-mariadb-runtime.sh', 'patches/azerothcore-android/**', 'patches/mariadb-10.11.9/**', 'modules/**', 'configs/**') }}
           restore-keys: |
             server-build-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.ANDROID_API }}-${{ env.ANDROID_ABI }}-
 
