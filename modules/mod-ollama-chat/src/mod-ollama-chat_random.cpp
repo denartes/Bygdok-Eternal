@@ -1,4 +1,6 @@
 #include "mod-ollama-chat_random.h"
+#include "mod-ollama-chat_dungeon.h"
+#include "mod-ollama-chat_guild.h"
 #include "mod-ollama-chat_config.h"
 #include "mod-ollama-chat_handler.h"
 #include "mod-ollama-chat_sentiment.h"
@@ -36,7 +38,7 @@ std::unordered_map<uint64_t, time_t> nextRandomChatTime;
 
 void OllamaBotRandomChatter::OnUpdate(uint32 diff)
 {
-    if (!g_Enable)
+    if (!g_Enable || GuildRelationshipsMode())
         return;
 
     if (g_ConversationHistorySaveInterval > 0)
@@ -640,7 +642,7 @@ void OllamaBotRandomChatter::HandleRandomChatter()
             else if (bot->GetGroup())
             {
                 // Check if party message can be sent
-                if (!g_DisableForParty)
+                if (!g_DisableForParty && !DungeonChatOwnsParty(bot))
                 {
                     hasValidDestination = true;
                 }

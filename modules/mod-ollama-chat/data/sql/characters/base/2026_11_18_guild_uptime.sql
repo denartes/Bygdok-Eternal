@@ -1,0 +1,3 @@
+ALTER TABLE `ollama_chat_session_history`
+  MODIFY COLUMN `transcript` LONGTEXT NOT NULL,
+  ADD COLUMN IF NOT EXISTS `memory_offset` BIGINT UNSIGNED NOT NULL DEFAULT 0;

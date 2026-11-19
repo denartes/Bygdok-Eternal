@@ -37,7 +37,7 @@ object RealmMods {
         RealmModDefinition("mod-transmog-plus", "Transmog Plus", "mod_transmog_plus.conf", listOf("Transmog.Enable"),
             warning = "Saved appearances remain when disabled."),
         RealmModDefinition("mod-ollama-chat", "Ollama Chat", "mod_ollama_chat.conf", listOf("OllamaChat.Enable"), true,
-            "Requires a separately configured Ollama API endpoint and model.")
+            "Choose app-managed on-device Ollama, or configure a remote Ollama API endpoint and model.")
     )
     val playerbots = all.single { it.id == "mod-playerbots" }
 }

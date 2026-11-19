@@ -23,6 +23,7 @@ enum class RealmPhase {
     PREPARING_CLIENT_DATA,
     STARTING_WORLDSERVER,
     RUNNING,
+    STOPPING,
     FAILED
 }
 
@@ -30,7 +31,8 @@ data class RealmState(
     val phase: RealmPhase = RealmPhase.IDLE,
     val database: ComponentStatus = ComponentStatus.NOT_CONFIGURED,
     val authserver: ComponentStatus = ComponentStatus.NOT_CONFIGURED,
-    val worldserver: ComponentStatus = ComponentStatus.NOT_CONFIGURED
+    val worldserver: ComponentStatus = ComponentStatus.NOT_CONFIGURED,
+    val ollama: ComponentStatus = ComponentStatus.NOT_CONFIGURED
 ) {
     val isRunning: Boolean
         get() = phase == RealmPhase.RUNNING &&
@@ -38,7 +40,8 @@ data class RealmState(
             worldserver == ComponentStatus.RUNNING
 
     val isBusy: Boolean
-        get() = phase == RealmPhase.STARTING_DATABASE ||
+        get() = phase == RealmPhase.STOPPING ||
+            phase == RealmPhase.STARTING_DATABASE ||
             phase == RealmPhase.CONFIGURING_INITIAL_SETUP ||
             phase == RealmPhase.IMPORTING_REALM ||
             phase == RealmPhase.STARTING_AUTHSERVER ||

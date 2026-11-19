@@ -1,5 +1,9 @@
 package com.denartes.bygdoketernal
 
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,8 +36,11 @@ import com.denartes.bygdoketernal.realm.RealmModConfig
 import com.denartes.bygdoketernal.realm.RealmModDefinition
 import com.denartes.bygdoketernal.realm.RealmMods
 import com.denartes.bygdoketernal.realm.RealmRuntime
+import com.denartes.bygdoketernal.realm.RealmOllamaConfig
+import com.denartes.bygdoketernal.realm.RealmOllamaDriverStore
 import com.denartes.bygdoketernal.realm.realmModConfigStore
 import java.io.IOException
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -43,6 +50,9 @@ import kotlinx.coroutines.withContext
 fun ModsScreen(editable: Boolean, onEditingChanged: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current.applicationContext
     val store = remember(context) { realmModConfigStore(context) }
+    val drivers = remember(context) {
+        RealmOllamaDriverStore(File(context.filesDir, "ollama-drivers"), Build.VERSION.SDK_INT)
+    }
     val scope = rememberCoroutineScope()
     var configs by remember { mutableStateOf<Map<RealmModDefinition, String>>(emptyMap()) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -58,6 +68,7 @@ fun ModsScreen(editable: Boolean, onEditingChanged: (Boolean) -> Unit, modifier:
     var working by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var failed by remember { mutableStateOf(false) }
+    var driverName by remember { mutableStateOf<String?>(null) }
 
     fun perform(action: suspend () -> Unit) {
         working = true
@@ -84,8 +95,25 @@ fun ModsScreen(editable: Boolean, onEditingChanged: (Boolean) -> Unit, modifier:
         }
     }
 
+    val importDriver = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) perform {
+            val driver = withContext(Dispatchers.IO) {
+                var name = ""
+                RealmRuntime.editModSettings {
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: throw IOException("Could not open the selected driver ZIP")
+                    input.use { name = drivers.install(it).name }
+                }
+                name
+            }
+            driverName = driver
+            message = "Custom driver imported: $driver. Ollama will verify it on the next realm start."
+        }
+    }
+
     fun load() = perform {
         configs = withContext(Dispatchers.IO) { RealmMods.all.associateWith(store::load) }
+        driverName = withContext(Dispatchers.IO) { drivers.selected()?.name }
     }
 
     LaunchedEffect(store) { load() }
@@ -138,6 +166,55 @@ fun ModsScreen(editable: Boolean, onEditingChanged: (Boolean) -> Unit, modifier:
                                 style = MaterialTheme.typography.bodySmall
                             )
                             if (mod.warning.isNotEmpty()) Text(mod.warning, style = MaterialTheme.typography.bodySmall)
+                            if (mod.id == "mod-ollama-chat" && config != null) {
+                                val managed = RealmOllamaConfig.managed(config)
+                                Text(
+                                    if (managed) "On-device Ollama: qwen2.5:0.5b. Missing model files download at the next realm start."
+                                    else "Remote Ollama selected. On-device mode runs inside Bygdok without Termux.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                TextButton(
+                                    enabled = canEdit,
+                                    onClick = {
+                                        perform {
+                                            withContext(Dispatchers.IO) {
+                                                RealmRuntime.editModSettings {
+                                                    store.save(mod, RealmOllamaConfig.selectManaged(config, !managed))
+                                                }
+                                            }
+                                            configs = configs + (mod to withContext(Dispatchers.IO) { store.load(mod) })
+                                            message = if (managed) "Remote Ollama selected. Saved endpoint settings retained."
+                                                else "On-device Ollama selected. Enable Ollama Chat, then start the realm to download the model."
+                                        }
+                                    }
+                                ) { Text(if (managed) "Use remote Ollama" else "Use on-device Ollama (allows ~400 MB download)") }
+                                Text(
+                                   driverName?.let { "Custom Vulkan driver: $it" } ?: "Vulkan driver: Android system",
+                                   style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                   "Import only trusted AdrenoTools driver ZIPs: native driver code runs with Ollama's app permissions. Only local AI uses this driver; failed verification uses CPU.",
+                                   style = MaterialTheme.typography.bodySmall
+                                )
+                                Row {
+                                   TextButton(
+                                       enabled = canEdit,
+                                       onClick = { importDriver.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }
+                                   ) { Text("Import driver ZIP") }
+                                   TextButton(
+                                       enabled = canEdit,
+                                       onClick = {
+                                           perform {
+                                               withContext(Dispatchers.IO) {
+                                                   RealmRuntime.editModSettings { drivers.remove() }
+                                               }
+                                               driverName = null
+                                               message = "Custom driver removed. Ollama will use the system driver."
+                                           }
+                                       }
+                                   ) { Text("Use system driver") }
+                                }
+                            }
                             TextButton(
                                 enabled = config != null && !working,
                                 onClick = {

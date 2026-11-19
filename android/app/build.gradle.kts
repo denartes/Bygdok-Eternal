@@ -60,6 +60,8 @@ android {
 // The application is self-contained; do not permit dashboard-only APKs.
 val nativeRuntimeDir = file("../../runtime/build/bygdok-runtime-arm64")
 val mariaDbRuntimeDir = file("../../runtime/build/mariadb-arm64")
+val ollamaRuntimeDir = file("../../runtime/build/ollama-arm64")
+val assetsOllamaLicensesDir = file("src/main/assets/ollama-licenses")
 val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
 val assetsSqlDir = file("src/main/assets/sql")
 val assetsMariaDbShareDir = file("src/main/assets/mariadb-share")
@@ -99,12 +101,25 @@ tasks.register("embedNativeRuntime") {
     if (mariaDbRuntimeDir.exists()) {
         inputs.dir(mariaDbRuntimeDir)
     }
+    inputs.dir(ollamaRuntimeDir)
     outputs.dir(jniLibsDir)
     outputs.dir(assetsSqlDir)
     outputs.dir(assetsMariaDbShareDir)
     outputs.dir(assetsMariaDbLibDir)
+    outputs.dir(assetsOllamaLicensesDir)
 
     doLast {
+        check(File(ollamaRuntimeDir, "bin/ollama").isFile &&
+            File(ollamaRuntimeDir, "lib/libggml-base.so").isFile &&
+            File(ollamaRuntimeDir, "lib/libggml-vulkan.so").isFile) {
+            "Embedded Ollama runtime missing. Run scripts/build-ollama-runtime.sh with the Android NDK."
+        }
+        listOf("libadrenotools.so", "libhook_impl.so", "libmain_hook.so",
+            "libfile_redirect_hook.so", "libgsl_alloc_hook.so").forEach { name ->
+            check(File(ollamaRuntimeDir, "lib/$name").isFile) {
+                "Embedded custom-driver loader missing: $name. Rebuild the Ollama runtime."
+            }
+        }
         if (!nativeRuntimeDir.exists() && !mariaDbRuntimeDir.exists()) {
             error("[embedNativeRuntime] Complete runtime artifact missing at $nativeRuntimeDir")
         }
@@ -114,6 +129,10 @@ tasks.register("embedNativeRuntime") {
         assetsMariaDbShareDir.deleteRecursively()
         assetsMariaDbLibDir.deleteRecursively()
         jniLibsDir.mkdirs()
+        File(ollamaRuntimeDir, "bin/ollama").copyTo(File(jniLibsDir, "libollama.so"), overwrite = true)
+        File(ollamaRuntimeDir, "lib").listFiles { library -> library.name.endsWith(".so") }
+            ?.forEach { library -> library.copyTo(File(jniLibsDir, library.name), overwrite = true) }
+        copyRuntimeTree(File(ollamaRuntimeDir, "licenses"), assetsOllamaLicensesDir)
 
         if (nativeRuntimeDir.exists()) {
             val serverExecutables = mapOf(
@@ -205,4 +224,5 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

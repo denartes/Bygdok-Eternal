@@ -1,0 +1,43 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -180,10 +180,9 @@ if(NOT APPLE)
+     find_package(Vulkan)
+     if(Vulkan_FOUND)
++        if(NOT TARGET ggml-vulkan)
+         add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ml/backend/ggml/ggml/src/ggml-vulkan)
+         target_include_directories(ggml-vulkan PRIVATE ${GGML_INCLUDE_DIRS})
++        endif()
+         install(TARGETS ggml-vulkan
+-            RUNTIME_DEPENDENCIES
+-                PRE_INCLUDE_REGEXES vulkan
+-                PRE_EXCLUDE_REGEXES ".*"
+             RUNTIME DESTINATION ${OLLAMA_INSTALL_DIR} COMPONENT Vulkan
+             LIBRARY DESTINATION ${OLLAMA_INSTALL_DIR} COMPONENT Vulkan
+diff --git a/ml/backend/ggml/ggml/src/ggml-vulkan/CMakeLists.txt b/ml/backend/ggml/ggml/src/ggml-vulkan/CMakeLists.txt
+--- a/ml/backend/ggml/ggml/src/ggml-vulkan/CMakeLists.txt
++++ b/ml/backend/ggml/ggml/src/ggml-vulkan/CMakeLists.txt
+@@ -39,6 +39,8 @@ function(test_shader_extension_support EXTENSION_NAME TEST_SHADER_FILE RESULT_VARIABLE)
+     if (${glslc_error} MATCHES ".*extension not supported: ${EXTENSION_NAME}.*")
+         message(STATUS "${EXTENSION_NAME} not supported by glslc")
+         set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
++    elseif(ANDROID)
++        set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
+     else()
+         message(STATUS "${EXTENSION_NAME} supported by glslc")
+         set(${RESULT_VARIABLE} ON PARENT_SCOPE)
+diff --git a/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -4854,8 +4854,5 @@
+-        device_create_info = {
+-            vk::DeviceCreateFlags(),
+-            device_queue_create_infos,
+-            {},
+-            device_extensions
+-        };
++        device_create_info.setFlags(vk::DeviceCreateFlags());
++        device_create_info.setQueueCreateInfos(device_queue_create_infos);
++        device_create_info.setPEnabledExtensionNames(device_extensions);
+         device_create_info.setPNext(&device_features2);
+         device->device = device->physical_device.createDevice(device_create_info);

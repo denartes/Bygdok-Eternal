@@ -1,4 +1,6 @@
 #include "mod-ollama-chat_events.h"
+#include "mod-ollama-chat_dungeon.h"
+#include "mod-ollama-chat_guild.h"
 #include "mod-ollama-chat_config.h"
 #include "mod-ollama-chat_random.h"
 #include "mod-ollama-chat_api.h"
@@ -28,13 +30,21 @@ static std::unordered_map<Player*, std::chrono::steady_clock::time_point> botEve
 
 void OllamaBotEventChatter::DispatchGameEvent(Player* source, std::string type, std::string detail)
 {
-    if (!g_Enable || !g_EnableEventChatter)
+    if (!g_Enable || GuildRelationshipsMode() || !g_EnableEventChatter)
         return;
     
     if (!source)
     {
        return;
     }
+
+    if (DungeonChatOwnsParty(source) &&
+        type != g_GuildEventTypeGuildJoin && type != g_GuildEventTypeGuildLeave &&
+        type != g_GuildEventTypeGuildPromotion && type != g_GuildEventTypeGuildDemotion &&
+        type != g_GuildEventTypeLevelUp && type != g_GuildEventTypeEpicGear &&
+        type != g_GuildEventTypeRareGear && type != g_GuildEventTypeDungeonComplete &&
+        type != g_GuildEventTypeGuildAchievement && type != g_GuildEventTypeGuildLogin)
+        return;
 
     bool isSourceBot = PlayerbotsMgr::instance()->GetPlayerbotAI(source) != nullptr;
     bool hasNearbyRealPlayer = false;
@@ -235,6 +245,8 @@ void OllamaBotEventChatter::DispatchGameEvent(Player* source, std::string type, 
 
     for (Player* bot : candidateBots)
     {
+        if (!isGuildEvent && DungeonChatOwnsParty(bot))
+            continue;
         PlayerbotAI* ai = PlayerbotsMgr::instance()->GetPlayerbotAI(bot);
         if (!ai) {
             if (g_DebugEnabled)
@@ -482,6 +494,7 @@ void ChatOnKill::OnPlayerCreatureKill(Player* killer, Creature* victim)
     {
         return;
     }
+    DungeonChatBossKill(killer, victim);
     eventChatter.DispatchGameEvent(killer, g_EventTypeDefeated, victim->GetName());
 }
 
@@ -500,6 +513,7 @@ void ChatOnKill::OnPlayerCreatureKilledByPet(Player* owner, Creature* victim)
     {
         return;
     }
+    DungeonChatBossKill(owner, victim);
     eventChatter.DispatchGameEvent(owner, g_EventTypePetDefeated, victim->GetName());
 }
 
@@ -543,6 +557,7 @@ void ChatOnDeath::OnPlayerJustDied(Player* player)
     {
         return;
     }
+    DungeonChatDeath(player);
     eventChatter.DispatchGameEvent(player, g_EventTypeDied, "");
 }
 
@@ -712,4 +727,3 @@ void ChatOnGuildMemberChange::OnGuildMemberLogin(Player* player, Guild* guild)
     if (!g_GuildEventTypeGuildLogin.empty())
         eventChatter.DispatchGameEvent(player, g_GuildEventTypeGuildLogin, guild->GetName());
 }
-

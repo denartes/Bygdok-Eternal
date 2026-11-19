@@ -13,6 +13,16 @@
 #     Default:     1 (true)
 OllamaChat.Enable = 1
 
+# App-managed Ollama. Opt in using Mods > Ollama Chat > Use on-device Ollama.
+# Downloads qwen2.5:0.5b (about 400 MB) on the next realm start if not present.
+# These app settings do not change remote URL/model preferences saved below.
+Bygdok.Ollama.Managed = 0
+Bygdok.Ollama.AllowModelDownload = 0
+
+# Opt-in guild-only mode. Restart the realm after changing these settings.
+# Requires Bygdok's managed on-device Ollama. Replaces legacy Ollama replies and chatter.
+OllamaChat.GuildRelationships.Enable = 0
+
 # OllamaChat.DebugEnabled
 #     Description: Enables extra logging for debugging purposes.
 #                  When set to 1 (true), detailed debug information will be logged by the module.
@@ -28,6 +38,19 @@ OllamaChat.DebugEnabled = 0
 #                  When disabled (0), only standard logging is used.
 #     Default:     0 (false)
 OllamaChat.DebugShowFullPrompt = 0
+
+# Dungeon party conversations are experimental and only apply to non-raid
+# dungeon groups with a human player and a bot in the same instance.
+# Session history is held in memory and discarded after the run or restart.
+OllamaChat.DungeonChat.Enable = 0
+
+# Minimum seconds between optional dungeon event remarks. Player messages
+# can interrupt this cooldown. Combat replies still respect DisableRepliesInCombat.
+OllamaChat.DungeonChat.Cooldown = 20
+
+# Maximum age of a dungeon request, in seconds (clamped to 1-120). Responses
+# arriving after this age are discarded.
+OllamaChat.DungeonChat.RequestTimeout = 30
 
 # --------------------------------------------
 # OLLAMA LLM CONNECTION AND INFERENCE

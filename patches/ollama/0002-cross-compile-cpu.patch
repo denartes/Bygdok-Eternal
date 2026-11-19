@@ -1,0 +1,11 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -101,7 +101,5 @@ endforeach()
+ 
+ install(TARGETS ggml-base ${CPU_VARIANTS}
+-    RUNTIME_DEPENDENCIES
+-        PRE_EXCLUDE_REGEXES ".*"
+     RUNTIME DESTINATION ${OLLAMA_INSTALL_DIR} COMPONENT CPU
+     LIBRARY DESTINATION ${OLLAMA_INSTALL_DIR} COMPONENT CPU
+     FRAMEWORK DESTINATION ${OLLAMA_INSTALL_DIR} COMPONENT CPU

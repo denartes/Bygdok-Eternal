@@ -654,6 +654,7 @@ private fun OverviewPanel(
                 StatusLine("Database (MariaDB)", state.database)
                 StatusLine("Authserver", state.authserver)
                 StatusLine("Worldserver", state.worldserver)
+                StatusLine("On-device Ollama", state.ollama)
             }
         }
         Card(
@@ -864,6 +865,7 @@ private fun phaseLabel(phase: RealmPhase): String = when (phase) {
     RealmPhase.STARTING_AUTHSERVER -> "Starting authserver..."
     RealmPhase.PREPARING_CLIENT_DATA -> "Preparing client data..."
     RealmPhase.STARTING_WORLDSERVER -> "Starting worldserver..."
+    RealmPhase.STOPPING -> "Stopping realm..."
     else -> "Starting realm..."
 }
 

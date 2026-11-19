@@ -18,7 +18,7 @@
 > - `AiPlayerbot.RandomBotEmote = 0` (disables random emoting)
 > - `AiPlayerbot.RandomBotSuggestDungeons = 0` (disables dungeon suggestions)
 > - `AiPlayerbot.EnableGreet = 0` (disables greeting when invited)
-> - `AiPlayerbot.GuildFeedback = 0` (disables guild event chatting)
+> - `AiPlayerbot.InviteChat = 0` (disables native invite chatter)
 > - `AiPlayerbot.RandomBotSayWithoutMaster = 0` (disables bots talking without a master)
 
 ## Overview
@@ -26,6 +26,62 @@
 ***mod-ollama-chat*** is an AzerothCore module that enhances the Player Bots module by integrating external language model (LLM) support via the Ollama API. This module enables player bots to generate dynamic, in-character chat responses using advanced natural language processing locally on your computer (or remotely hosted). Bots are enriched with personality traits, random chatter triggers, and context-aware replies that mimic the language and lore of World of Warcraft.
 
 ## Features
+
+- **Persistent Guild Relationships (V1):** Select managed on-device Ollama, then
+  set `OllamaChat.GuildRelationships.Enable = 1` in the Ollama Chat configuration
+  and restart the realm. While enabled, this mode replaces legacy Ollama replies,
+  random/event chatter, and temporary dungeon conversations. Bygdok suppresses
+  native Playerbots chatter in the generated runtime configuration without
+  changing the saved Playerbots settings.
+
+  Start in normal guild chat: `/g Thrain, Elira, anyone up for ICC?` The guild can
+  read the conversation. The reply appears as `[Thrain]: @1 ...`. To continue,
+  type `/g @1 What time works?` using the ID in the reply. IDs are local to the
+  initiating character and start at `@1` after each realm restart. Unknown
+  and malformed IDs are rejected; only untagged messages start a conversation.
+  Up to two named, online guildmate bots can join a conversation, with one bot
+  responding per turn.
+
+  Only a human player's guild message can start a session. Bots reply but never
+  open a conversation, and login, level-up, and achievements do not start one.
+  Automatic sessions from earlier builds are not resumed or processed for
+  memory. Sessions and their full transcripts last until the realm stops, even
+  if the player logs out. Only recent dialogue is sent for each reply to fit
+  the model's context window. Android's **Stop Server** keeps Ollama and MariaDB
+  running while worldserver drains and consolidates, with a 60-second limit.
+  Long transcripts are consolidated in chunks into bot-specific memories.
+  The final successful transaction deletes the transcript and its session
+  records. Failures or abrupt stops leave unfinished transcripts and their
+  last completed chunk on disk for recovery. Recovery extracts memories only;
+  it does not restore old conversations to guild chat. All inference is on-device.
+  If an earlier build failed with `Unknown character set: 'ascii'`, install
+  the updated APK and start the realm again. The migration resumes without
+  clearing app data or recreating existing tables.
+
+- **Experimental Dungeon Party Conversations:** Enable `OllamaChat.DungeonChat.Enable = 1`
+  to give five-player dungeon parties a shared, temporary conversation and event
+  history. At least one real player and one bot must be in the same non-raid
+  dungeon instance. The module responds to party chat and can comment on entering,
+  deaths, dungeon boss kills, and completion when the core reports it. It keeps
+  one small in-memory session per group and instance, resets context on roster
+  changes, and discards it after the group leaves or the server restarts. It does
+  not use or create persistent relationship memories.
+
+  `OllamaChat.DungeonChat.Cooldown` controls event chatter pacing and
+  `OllamaChat.DungeonChat.RequestTimeout` controls request expiry. The feature
+  respects `OllamaChat.DisableForParty`, `OllamaChat.DisableRepliesInCombat`,
+  and `OllamaChat.EnableEventChatter`. Its bounded single-request worker prioritizes
+  player messages over queued event remarks; when busy, expired or excess requests
+  are dropped. Existing party replies and event/random party chatter are suppressed
+  for eligible sessions. Guild and non-dungeon chatter remain independent. Dungeon
+  completion comments depend on the core's encounter-credit data and hooks, so not
+  every dungeon necessarily produces one.
+  During the 60-second departure grace period, party messages sent from outside
+  the instance are not recorded or answered by the dungeon session. Distinct
+  personalities require `OllamaChat.EnableRPPersonalities = 1`.
+
+  To run the standalone session-state tests on a machine with a C++17 compiler:
+  `g++ -std=c++17 modules/mod-ollama-chat/tests/dungeon_state_test.cpp -o dungeon_state_test && ./dungeon_state_test`.
 
 - **Ollama LLM Integration:**  
   Bots generate chat responses by querying an external Ollama API endpoint. This enables natural and contextually appropriate in-game dialogue.

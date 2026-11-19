@@ -24,8 +24,13 @@ std::string ExtractTextBetweenDoubleQuotes(const std::string& response)
 // Function to perform the API call.
 std::string QueryOllamaAPI(const std::string& prompt)
 {
-    // Initialize our custom HTTP client
-    static OllamaHttpClient httpClient;
+    return QueryOllamaAPI(prompt, 120);
+}
+
+std::string QueryOllamaAPI(const std::string& prompt, int timeoutSeconds)
+{
+    OllamaHttpClient httpClient;
+    httpClient.SetTimeout(timeoutSeconds);
     
     if (!httpClient.IsAvailable())
     {

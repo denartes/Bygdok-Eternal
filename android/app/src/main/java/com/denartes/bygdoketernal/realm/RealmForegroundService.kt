@@ -8,11 +8,15 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import androidx.core.app.NotificationCompat
 import com.denartes.bygdoketernal.MainActivity
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.util.concurrent.TimeUnit
 import com.denartes.bygdoketernal.realm.RealmPhase
 import com.denartes.bygdoketernal.realm.RealmNetworkSettings
 import com.denartes.bygdoketernal.realm.RealmNetworkSettingsStore
@@ -30,12 +34,14 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
+import org.json.JSONException
 
 private data class ProcessStartupSignal(val ready: Boolean, val exitCode: Int? = null)
 
 private data class ProcessReadiness(
     val firstSignal: CompletableDeferred<ProcessStartupSignal> = CompletableDeferred(),
-    val outputClosed: CompletableDeferred<Unit> = CompletableDeferred()
+    val outputClosed: CompletableDeferred<Unit> = CompletableDeferred(),
+    @Volatile var pid: Int? = null
 )
 
 /**
@@ -57,7 +63,11 @@ class RealmForegroundService : Service() {
     private var mariadbProcess: Process? = null
     private var authserverProcess: Process? = null
     private var worldserverProcess: Process? = null
-    private var intentionalStop = false
+    private var worldserverReadiness: ProcessReadiness? = null
+    @Volatile private var ollama: RealmOllama? = null
+    private var ollamaMonitorJob: Job? = null
+    @Volatile private var intentionalStop = false
+    private var stopJob: Job? = null
     private var logTailJob: Job? = null
 
     private lateinit var paths: RealmPaths
@@ -73,12 +83,14 @@ class RealmForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_REALM -> {
+                if (stopJob?.isActive == true) return START_NOT_STICKY
                 intentionalStop = false
                 startForeground(NOTIFICATION_ID, buildNotification("Starting realm..."))
                 scope.launch { lifecycleMutex.withLock { startRealm() } }
                 return START_STICKY
             }
             ACTION_START_DATABASE_ONLY -> {
+                if (stopJob?.isActive == true) return START_NOT_STICKY
                 intentionalStop = false
                 startForeground(NOTIFICATION_ID, buildNotification("Starting MariaDB..."))
                 scope.launch { lifecycleMutex.withLock { startDatabaseOnly() } }
@@ -107,15 +119,22 @@ class RealmForegroundService : Service() {
                 return START_STICKY
             }
             ACTION_STOP -> {
-                if (RealmRuntime.botAccounts.value.busy) {
-                    scope.launch {
+                if (stopJob?.isActive == true) return START_NOT_STICKY
+                val graceful = RealmRuntime.state.value.worldserver == ComponentStatus.RUNNING
+                intentionalStop = true
+                RealmRuntime.updateState { it.copy(phase = RealmPhase.STOPPING) }
+                updateNotification("Stopping realm...")
+                if (graceful || RealmRuntime.botAccounts.value.busy) {
+                    stopJob = scope.launch {
                         lifecycleMutex.withLock {
-                            intentionalStop = true
-                            stopRealm()
+                            try {
+                                stopWorldserverGracefully()
+                            } finally {
+                                stopRealm()
+                            }
                         }
                     }
                 } else {
-                    intentionalStop = true
                     stopRealm()
                 }
                 return START_NOT_STICKY
@@ -679,7 +698,27 @@ class RealmForegroundService : Service() {
             val validatesTransmogSchema = requiresTransmogSchemaTableCheck(batch.moduleName, batch.database)
             val transmogSchemaReady = !validatesTransmogSchema ||
                 databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")
-            if (shouldSkipModuleDatabaseBootstrap(marker.isFile, transmogSchemaReady)) continue
+            val skipBase = shouldSkipModuleDatabaseBootstrap(marker.isFile, transmogSchemaReady)
+            val sqlFiles = if (skipBase) {
+                batch.sqlFiles.filter { file ->
+                    if (batch.moduleName != "mod-ollama-chat" || batch.database != "acore_characters") {
+                        false
+                    } else when (file.name) {
+                        "2026_11_18_guild_relationships.sql" -> !listOf(
+                            "ollama_chat_sessions", "ollama_chat_participants",
+                            "ollama_chat_session_history", "ollama_bot_memories"
+                        ).all { databaseTableExists(clientBinary, batch.database, it) }
+                        "2026_11_18_guild_uptime.sql" -> !databaseSchemaExists(
+                            clientBinary,
+                            "SELECT EXISTS (SELECT 1 FROM information_schema.columns " +
+                                "WHERE table_schema = 'acore_characters' AND table_name = 'ollama_chat_session_history' " +
+                                "AND column_name = 'memory_offset');"
+                        )
+                        else -> false
+                    }
+                }
+            } else batch.sqlFiles
+            if (sqlFiles.isEmpty()) continue
             if (batch.moduleName == "mod-playerbots" &&
                 databaseTableExists(clientBinary, batch.database, "playerbots_account_keys")
             ) {
@@ -688,7 +727,7 @@ class RealmForegroundService : Service() {
                 continue
             }
 
-            for (sqlFile in batch.sqlFiles) {
+            for (sqlFile in sqlFiles) {
                 if (sqlFile.length() == 0L) continue
                 RealmRuntime.appendLog("[db-module:${batch.database}] Importing ${sqlFile.name}")
                 runBlockingProcessFromFile(
@@ -713,8 +752,11 @@ class RealmForegroundService : Service() {
         }
     }
 
-    private fun databaseTableExists(clientBinary: File, database: String, table: String): Boolean {
-        val query = "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '$database' AND table_name = '$table');"
+    private fun databaseTableExists(clientBinary: File, database: String, table: String): Boolean =
+        databaseSchemaExists(clientBinary,
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '$database' AND table_name = '$table');")
+
+    private fun databaseSchemaExists(clientBinary: File, query: String): Boolean {
         val process = ProcessBuilder(
             clientBinary.absolutePath,
             "--no-defaults",
@@ -805,7 +847,11 @@ class RealmForegroundService : Service() {
         worldserverProcess = null
 
         realmModConfigStore(this).install(paths.modulesConfigDir, portableModuleConfigs)
+        startManagedOllama()
+        check(!intentionalStop) { "Realm startup was stopped" }
         val process = ProcessBuilder(
+            "/system/bin/sh", "-c",
+            "printf 'BYGDOK_PID:%s\\n' \"\$\$\"; exec \"\$@\"", "worldserver",
             nativeBinary("libworldserver.so"),
             "-c", paths.worldserverConf.absolutePath
         )
@@ -815,6 +861,7 @@ class RealmForegroundService : Service() {
             .start()
         worldserverProcess = process
         val readiness = ProcessReadiness()
+        worldserverReadiness = readiness
         streamOutput(process, "worldserver", readiness)
         monitorExit(process, "worldserver", readiness) { ComponentStatus.FAILED }
 
@@ -997,6 +1044,37 @@ class RealmForegroundService : Service() {
         return runRealmDatabaseQuery(builder, cacheDir) { RealmRuntime.appendLog("[database-client] $it") }
     }
 
+    private fun stopWorldserverGracefully() {
+        val process = worldserverProcess ?: return
+        if (!process.isAlive) return
+        RealmRuntime.appendLog("[realm] Requesting graceful worldserver shutdown")
+        val pid = worldserverReadiness?.pid
+        if (pid != null) {
+            try {
+                // Keep the log pipes open, but release the core's blocking console read.
+                Os.kill(pid, OsConstants.SIGTERM)
+                try {
+                    process.outputStream.close()
+                } catch (error: IOException) {
+                    RealmRuntime.appendLog("[realm] Could not close worldserver console: ${error.message}")
+                }
+            } catch (error: ErrnoException) {
+                if (process.isAlive) {
+                    RealmRuntime.appendLog("[realm] Could not signal worldserver: ${error.message}")
+                    process.destroy()
+                }
+            }
+        } else {
+            RealmRuntime.appendLog("[realm] Worldserver PID unavailable; using process termination")
+            process.destroy()
+        }
+        if (!process.waitFor(60, TimeUnit.SECONDS)) {
+            RealmRuntime.appendLog("[realm] Worldserver shutdown timed out; unfinished guild memories will retry on startup")
+            process.destroyForcibly()
+            process.waitFor()
+        }
+    }
+
     private fun stopRealm(resetState: Boolean = true) {
         stopProcessesOnly()
         if (resetState) {
@@ -1014,14 +1092,62 @@ class RealmForegroundService : Service() {
     }
 
     private fun stopProcessesOnly() {
+        ollamaMonitorJob?.cancel()
+        ollamaMonitorJob = null
+        ollama?.stop()
+        ollama = null
         logTailJob?.cancel()
         logTailJob = null
         val processes = listOfNotNull(worldserverProcess, authserverProcess, mariadbProcess)
         processes.forEach { it.destroyForcibly() }
         processes.forEach { it.waitFor() }
         worldserverProcess = null
+        worldserverReadiness = null
         authserverProcess = null
         mariadbProcess = null
+    }
+
+    private suspend fun startManagedOllama() {
+        val configFile = File(paths.modulesConfigDir, "mod_ollama_chat.conf")
+        val config = configFile.readText()
+        val definition = RealmMods.all.single { it.id == "mod-ollama-chat" }
+        if (!RealmModConfig.enabled(definition, config) || !RealmOllamaConfig.managed(config)) return
+        check(!intentionalStop) { "Realm startup was stopped" }
+        val engine = RealmOllama(
+            File(paths.root, "ollama"), File(paths.nativeLibraryDir),
+            { RealmRuntime.appendLog("[ollama] $it") },
+            { status -> RealmRuntime.updateState { it.copy(ollama = status) } },
+            RealmOllamaDriverStore(File(filesDir, "ollama-drivers"), android.os.Build.VERSION.SDK_INT)
+        )
+        ollama = engine
+        fun failed(error: Exception) {
+            engine.stop()
+            RealmRuntime.updateState { it.copy(ollama = ComponentStatus.FAILED) }
+            RealmRuntime.appendLog("[ollama] Local AI unavailable: ${error.message}. AI chat is disabled for this server session; gameplay can continue.")
+            configFile.writeText(RealmModConfig.replace(config, mapOf("OllamaChat.Enable" to "0")))
+        }
+        try {
+            engine.start(RealmOllamaConfig.downloadAllowed(config))
+            check(!intentionalStop) { "Realm startup was stopped" }
+            if (RealmOllamaConfig.guildRelationships(config)) {
+                val playerbots = File(paths.modulesConfigDir, RealmMods.playerbots.configFile)
+                playerbots.writeText(RealmOllamaConfig.quietPlayerbotsConfig(playerbots.readText()))
+                RealmRuntime.appendLog("[ollama] Native Playerbots chatter disabled for guild relationship mode.")
+            }
+            configFile.writeText(RealmOllamaConfig.localRuntimeConfig(config))
+            ollamaMonitorJob = scope.launch { engine.monitor() }
+        } catch (cancelled: CancellationException) {
+            engine.stop()
+            throw cancelled
+        } catch (error: IOException) {
+            failed(error)
+        } catch (error: IllegalStateException) {
+            failed(error)
+        } catch (error: JSONException) {
+            failed(error)
+        } catch (error: IllegalArgumentException) {
+            failed(error)
+        }
     }
 
     private fun nativeBinary(name: String): String =
@@ -1088,6 +1214,9 @@ class RealmForegroundService : Service() {
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
+                        if (tag == "worldserver" && readiness.pid == null && line.startsWith("BYGDOK_PID:")) {
+                            readiness.pid = line.substringAfter(':').toIntOrNull()?.takeIf { it > 1 }
+                        }
                         RealmRuntime.appendLog("[$tag] $line")
                         if (matchesReadinessSignal(tag, line)) {
                             readiness.firstSignal.complete(ProcessStartupSignal(ready = true))
@@ -1106,22 +1235,22 @@ class RealmForegroundService : Service() {
         logTailJob?.cancel()
         logTailJob = scope.launch {
             val files = listOf(
-                "Auth.log" to "authserver-file",
-                "Server.log" to "worldserver-file",
-                "Errors.log" to "errors-file",
-                "Playerbots.log" to "playerbots-file"
+                File(paths.logsDir, "Auth.log") to "authserver-file",
+                File(paths.logsDir, "Server.log") to "worldserver-file",
+                File(paths.logsDir, "Errors.log") to "errors-file",
+                File(paths.logsDir, "Playerbots.log") to "playerbots-file",
+                File(paths.root, "ollama/ollama.log") to "ollama-native"
             )
-            val positions = files.associate { (name, _) ->
-                name to 0L
+            val positions = files.associate { (file, tag) ->
+                file to if (tag == "ollama-native") file.length() else 0L
             }.toMutableMap()
             while (isActive) {
-                for ((name, tag) in files) {
-                    val file = File(paths.logsDir, name)
+                for ((file, tag) in files) {
                     if (!file.isFile) continue
                     RandomAccessFile(file, "r").use { reader ->
-                        val position = positions[name] ?: 0L
+                        val position = positions[file] ?: 0L
                         if (file.length() < position) {
-                            positions[name] = 0L
+                            positions[file] = 0L
                             reader.seek(0)
                         } else {
                             reader.seek(position)
@@ -1131,7 +1260,7 @@ class RealmForegroundService : Service() {
                             RealmRuntime.appendLog("[$tag] $line")
                             line = reader.readLine()
                         }
-                        positions[name] = reader.filePointer
+                        positions[file] = reader.filePointer
                     }
                 }
                 kotlinx.coroutines.delay(250)

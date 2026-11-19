@@ -1,1 +1,2 @@
 scripts/*.sh text eol=lf
+patches/ollama/*.patch text eol=lf

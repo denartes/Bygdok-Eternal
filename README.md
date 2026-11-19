@@ -154,10 +154,82 @@ This removes **module downloads**, not all downloads: AzerothCore, native depend
 
 - **AzerothCore** provides the game server. The build fetches [`duall/azerothcore-android`](https://github.com/duall/azerothcore-android) at commit `abc884520173084d5cd37b72b57b3822230dcb32`, applies the repository's compatibility patches and compiles it with the local modules.
 - **MariaDB** stores accounts, characters, world state and playerbot data. The local build extracts the MariaDB `12.3.2` provider from the pinned Pocket Realm `v0.103.0-alpha` APK, verifying its SHA-256 before use. The provider APK is a build input, not a second app users must install.
-- **The Android app** packages the native executables and shared libraries, then its foreground service manages MariaDB, `authserver` and `worldserver` in the app's private environment. It installs configs and database content, manages startup, downloads missing game data and streams logs.
+- **The Android app** packages the native executables and shared libraries, then its foreground service manages MariaDB, `authserver`, `worldserver` and optional local Ollama in the app's private environment. It installs configs and database content, manages startup, downloads missing game data and streams logs.
+- **On-device Ollama** is built from pinned Ollama `0.20.3` sources with Vulkan GPU support and CPU fallback. No Termux installation is required. Model weights are downloaded separately after opt-in.
 - **Persistent storage** holds realm data, downloaded game data and saved module settings separately from the APK. Generated runtime configs are rebuilt from bundled defaults and saved preferences.
 
 The local provider staging helper is [`tools/stage-pocket-realm-mariadb.py`](tools/stage-pocket-realm-mariadb.py). It does not invoke [`scripts/build-mariadb-runtime.sh`](scripts/build-mariadb-runtime.sh), which is a separate MariaDB `10.11.9` source-build path still referenced by CI. Those provider paths are not interchangeable: the current app expects the Pocket Realm provider layout, including its manifest and bootstrap files. Do not assume CI runtime artifacts have the same provider contract as the local build.
+
+### On-device AI chat (experimental)
+
+With the realm stopped, open **Mods**, enable **Playerbots** and **Ollama Chat**,
+then select **Use on-device Ollama (allows ~400 MB download)** on the Ollama
+Chat card. This explicitly permits downloading `qwen2.5:0.5b` at the next realm
+start. Allow additional storage for temporary download files. Ollama verifies
+model blobs through its normal pull protocol. Later starts reuse the downloaded
+model; a network connection is not needed once it is present.
+
+The app starts the actual Ollama daemon at `127.0.0.1:11435`, downloads the model
+if needed, and performs a deterministic arithmetic self-test before starting
+worldserver. It enables Vulkan, logs whether GPU offload was selected, and falls
+back to its built-in CPU backend according to Ollama's hardware detection.
+If GPU-first inference fails or the self-test returns an incorrect answer, the
+app logs the failure, restarts Ollama with Vulkan devices hidden, and verifies
+CPU inference before enabling chat. It does not silently accept corrupt output.
+On the tested Adreno 830 phone, the default model fails in Qualcomm's system
+Vulkan shader compiler. CPU recovery works, and an imported Mesa Turnip driver
+has separately passed arithmetic and dungeon-party generation tests with all
+25 model layers offloaded to the GPU. These were isolated native tests, not a
+complete app-import or live-dungeon test.
+The first version uses one
+loaded model, one concurrent generation, a 2048-token context and short replies.
+It does not expose Ollama to the LAN or use Ollama cloud inference. Startup and
+download progress appear in the app activity log; detailed native output is in
+the app-private `realm/ollama/ollama.log`. Home shows the Ollama component status.
+
+Stop shuts down app-owned Ollama as well as the realm. Model files persist across
+compatible app updates, not uninstall or Clear data. If startup or model download
+fails, the app logs the error and disables AI chat for that server session while
+allowing gameplay to continue. An unexpected later Ollama exit is shown as a
+failed component; stop/start the realm to retry.
+
+#### Custom Vulkan drivers
+
+With the realm stopped, open **Mods > Ollama Chat > Import driver ZIP** and pick
+a trusted AdrenoTools-format ZIP using Android's file picker. Copy your ZIP to
+the phone's Downloads folder first if it is currently on your PC. Import selects
+the driver for the next local Ollama start; it does not enable AI chat or change
+the phone's system driver. **Use system driver** removes the imported selection.
+Remote Ollama is unaffected.
+
+The importer accepts flat ZIPs with schema-1 `meta.json`, its named ARM64 ELF
+shared library and optional sibling libraries/licence notices. It checks paths,
+duplicate names, expanded size limits, Android API requirements and ELF headers
+before atomically replacing the selected driver. Failed validation preserves the
+previous driver. These checks do not prove that native code is trustworthy:
+imported drivers execute with the app's permissions. Do not import unknown ZIPs.
+
+Drivers stay in app-private storage across compatible updates, not uninstall or
+Clear data, and are not included in realm backups. Driver ZIPs are never bundled
+in the APK or uploaded by the build. The optional local `runtime/drivers/*.zip`
+directory is ignored by Git. The APK includes pinned BSD-licensed AdrenoTools
+and its helper libraries; this loader is used only by the Ollama Vulkan backend.
+Native logs show the requested driver and discovered device/driver identity.
+GPU inference must still pass the startup self-test; failures trigger the
+existing logged CPU recovery. Import support is not a guarantee of compatibility
+with a particular driver, GPU, kernel or Android release.
+
+Select **Use remote Ollama** to return to the saved endpoint/model configuration.
+Local overrides apply only to generated runtime configs, not saved remote
+preferences. Advanced settings `Bygdok.Ollama.Managed` and
+`Bygdok.Ollama.AllowModelDownload` are available in Configure; disable the latter
+to prohibit future model downloads.
+
+[`scripts/build-ollama-runtime.sh`](scripts/build-ollama-runtime.sh) cross-compiles
+the daemon and Vulkan/CPU backends using the Android NDK and a checksum-verified
+Go toolchain. The local native build and CI include it automatically. Model
+weights are not bundled in the APK. Building and JVM tests do not establish
+on-device GPU compatibility; verify startup, generation and shutdown on the phone.
 
 ## Repository guide
 

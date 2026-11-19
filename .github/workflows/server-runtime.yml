@@ -126,6 +126,15 @@ jobs:
       - name: Build and package server runtime
         run: bash scripts/build-server-runtime.sh
 
+      - name: Build embedded Ollama (Vulkan and CPU)
+        run: bash scripts/build-ollama-runtime.sh
+
+      - name: Upload Ollama runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: bygdok-ollama-arm64
+          path: runtime/build/ollama-arm64
+
       - name: Upload server runtime
         uses: actions/upload-artifact@v4
         with:

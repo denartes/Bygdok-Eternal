@@ -6,6 +6,7 @@
 #include "mod-ollama-chat_querymanager.h"
 
 std::string QueryOllamaAPI(const std::string& prompt);
+std::string QueryOllamaAPI(const std::string& prompt, int timeoutSeconds);
 
 // Checks if an API response is valid (not an error message)
 bool IsValidAPIResponse(const std::string& response);

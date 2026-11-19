@@ -1,0 +1,14 @@
+diff --git a/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ml/backend/ggml/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -20,6 +20,10 @@
+ #define VULKAN_HPP_DEFAULT_DISPATCHER ggml_vk_default_dispatcher()
+ 
+ #include <vulkan/vulkan.hpp>
++#if defined(__ANDROID__)
++#include "bygdok-vulkan-driver.h"
++#endif
++
+ 
+ #include <algorithm>
+ #include <cmath>

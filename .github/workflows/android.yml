@@ -27,6 +27,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Download embedded Ollama runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: bygdok-ollama-arm64
+          path: runtime/build/ollama-arm64
+
       - name: Set up Android SDK
         shell: bash
         run: |

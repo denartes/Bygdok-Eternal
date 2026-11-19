@@ -56,3 +56,4 @@ else
 fi
 
 bash "$REPO_DIR/scripts/build-server-runtime.sh"
+bash "$REPO_DIR/scripts/build-ollama-runtime.sh"
