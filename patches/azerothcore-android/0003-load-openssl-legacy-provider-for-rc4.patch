@@ -1,0 +1,19 @@
+diff --git a/src/common/Cryptography/ARC4.cpp b/src/common/Cryptography/ARC4.cpp
+index 750a3f948..b84c32a11 100644
+--- a/src/common/Cryptography/ARC4.cpp
++++ b/src/common/Cryptography/ARC4.cpp
+@@ -18,8 +18,13 @@
+ 
+ #include "ARC4.h"
+ #include "Errors.h"
++#include <openssl/provider.h>
+ 
+ Acore::Crypto::ARC4::ARC4() : _ctx(EVP_CIPHER_CTX_new())
+ {
++    static OSSL_PROVIDER* defaultProvider = OSSL_PROVIDER_load(nullptr, "default");
++    ASSERT(defaultProvider != nullptr);
++    static OSSL_PROVIDER* legacyProvider = OSSL_PROVIDER_load(nullptr, "legacy");
++    ASSERT(legacyProvider != nullptr);
+     _cipher = EVP_CIPHER_fetch(nullptr, "RC4", nullptr);
+ 
+     EVP_CIPHER_CTX_init(_ctx);

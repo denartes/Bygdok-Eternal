@@ -1,0 +1,27 @@
+diff --git a/src/common/Configuration/Config.cpp b/src/common/Configuration/Config.cpp
+index 5f653fa96..9e1207b32 100644
+--- a/src/common/Configuration/Config.cpp
++++ b/src/common/Configuration/Config.cpp
+@@ -21,6 +21,7 @@
+ #include "StringFormat.h"
+ #include "Tokenize.h"
+ #include "Util.h"
++#include <filesystem>
+ #include <cstdlib>
+ #include <fstream>
+ #include <mutex>
+@@ -538,6 +539,14 @@ std::vector<std::string> const& ConfigMgr::GetArguments() const
+ std::string const ConfigMgr::GetConfigPath()
+ {
+     std::lock_guard<std::mutex> lock(_configLock);
++    if (!_filename.empty())
++    {
++        std::filesystem::path configPath(_filename);
++        if (configPath.is_absolute() && configPath.has_parent_path())
++        {
++            return configPath.parent_path().string() + "/";
++        }
++    }
+ 
+ #if AC_PLATFORM == AC_PLATFORM_WINDOWS
+     return "configs/";

@@ -28,6 +28,12 @@ Guild Mate is an AzerothCore module for the Bygdok Eternal Android server that a
 
 ## Configuration
 
+### Bygdok Eternal app
+
+With the realm stopped, open **Accounts → Bot links / Guild Mate exclusions → Load / refresh database** to manage human-account exclusions. The app starts MariaDB only, without authserver or worldserver. Existing accounts can also be linked for trusted Playerbots access; account linking does not add characters to a guild and is not required for Guild Mate's autonomous login.
+
+Open **Mods → Guild Mate → Configure** to load and select existing guilds, then choose **Save settings**. Characters must already be members of those guilds. Account links and exclusions persist in the realm database; selected guilds persist in the app's saved mod configuration. Changes apply on the next realm start. See the [project README](../../README.md#bot-accounts-and-guild-mate-setup) for the full app workflow.
+
 ### Basic Configuration
 
 Edit `mod_guild_mate.conf` in your server's configuration directory:
@@ -59,7 +65,7 @@ GuildMate.GuildIds = "1,2,3"
 
 To find a guild's ID:
 ```sql
-SELECT id, name FROM guild;
+SELECT guildid, name FROM guild;
 ```
 
 All members of the specified guilds will be eligible for auto-login, except:

@@ -1,0 +1,9 @@
+########################################
+# AoeLoot module configuration
+########################################
+
+AOELoot.Enable = 0
+AOELoot.Message = 0
+AOELoot.Range = 55.0
+AOELoot.Group = 1
+AOELoot.Debug = 0

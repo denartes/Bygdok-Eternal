@@ -69,6 +69,9 @@ extern bool        g_EnableRPPersonalities;
 extern bool        g_EnableWhisperReplies;
 extern bool        g_DebugEnabled;
 extern bool        g_DebugShowFullPrompt;
+extern bool        g_DungeonChatEnable;
+extern uint32_t    g_DungeonChatCooldown;
+extern uint32_t    g_DungeonChatRequestTimeout;
 
 // --------------------------------------------
 // Random Chatter Timing

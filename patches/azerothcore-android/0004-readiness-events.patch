@@ -1,0 +1,25 @@
+diff --git a/src/server/apps/authserver/Main.cpp b/src/server/apps/authserver/Main.cpp
+--- a/src/server/apps/authserver/Main.cpp
++++ b/src/server/apps/authserver/Main.cpp
+@@ -159,9 +159,10 @@
+     std::string bindIp = sConfigMgr->GetOption<std::string>("BindIP", "0.0.0.0");
+ 
+     if (!sAuthSocketMgr.StartNetwork(*ioContext, bindIp, port))
+     {
+         LOG_ERROR("server.authserver", "Failed to initialize network");
+         return 1;
+     }
+ 
++    std::cout << "BYGDOK_READY:authserver" << std::endl;
+     std::shared_ptr<void> sAuthSocketMgrHandle(nullptr, [](void*) { sAuthSocketMgr.StopNetwork(); });
+diff --git a/src/server/apps/worldserver/Main.cpp b/src/server/apps/worldserver/Main.cpp
+--- a/src/server/apps/worldserver/Main.cpp
++++ b/src/server/apps/worldserver/Main.cpp
+@@ -370,6 +370,7 @@
+     // Set server online (allow connecting now)
+     LoginDatabase.DirectExecute("UPDATE realmlist SET flag = flag & ~{}, population = 0 WHERE id = '{}'", REALM_FLAG_VERSION_MISMATCH, realm.Id.Realm);
+     realm.PopulationLevel = 0.0f;
+     realm.Flags = RealmFlags(realm.Flags & ~uint32(REALM_FLAG_VERSION_MISMATCH));
++    std::cout << "BYGDOK_READY:worldserver" << std::endl;
+ 
+     // Start the freeze check callback cycle in 5 seconds (cycle itself is 1 sec)

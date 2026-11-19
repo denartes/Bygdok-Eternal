@@ -25,6 +25,8 @@
 #include <ctime>
 #include "DatabaseEnv.h"
 #include "mod-ollama-chat_handler.h"
+#include "mod-ollama-chat_dungeon.h"
+#include "mod-ollama-chat_guild.h"
 #include "mod-ollama-chat_api.h"
 #include "mod-ollama-chat_personality.h"
 #include "mod-ollama-chat_config.h"
@@ -195,6 +197,9 @@ bool PlayerBotChatHandler::OnPlayerCanUseChat(Player* player, uint32_t type, uin
 {
     if (!g_Enable)
         return true;
+
+    if (GuildRelationshipsMode())
+        return type != CHAT_MSG_GUILD || lang == LANG_ADDON || RouteGuildRelationshipMessage(player, msg);
 
     ChatChannelSourceLocal sourceLocal = GetChannelSourceLocal(type);
     ProcessChat(player, type, lang, msg, sourceLocal, nullptr, nullptr);
@@ -816,6 +821,9 @@ static std::string GenerateBotGameStateSnapshot(Player* bot)
 
 void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t /*type*/, uint32_t lang, std::string& msg, ChatChannelSourceLocal sourceLocal, Channel* channel, Player* receiver)
 {
+    if (GuildRelationshipsMode())
+        return;
+
     if (player == nullptr) {
         LOG_ERROR("server.loading", "[Ollama Chat] ProcessChat: player is null");
         return;
@@ -891,6 +899,9 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t /*type*/, uint32
         }
         return;
     }
+
+    if (sourceLocal == SRC_PARTY_LOCAL && DungeonChatHandleMessage(player, msg))
+        return;
              
     PlayerbotAI* senderAI = PlayerbotsMgr::instance()->GetPlayerbotAI(player);
     bool senderIsBot = (senderAI && senderAI->IsBotAI());

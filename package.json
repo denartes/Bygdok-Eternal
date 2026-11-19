@@ -1,0 +1,12 @@
+{
+  "name": "bygdok-eternal",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-local.cjs",
+    "deploy": "node scripts/deploy-local.cjs",
+    "test:build": "node --test scripts/tests/build-local.test.cjs scripts/tests/deploy-local.test.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

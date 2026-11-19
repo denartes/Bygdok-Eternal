@@ -68,6 +68,9 @@ bool        g_EnableRPPersonalities           = false;
 bool        g_EnableWhisperReplies            = false;
 bool        g_DebugEnabled                    = false;
 bool        g_DebugShowFullPrompt             = false;
+bool        g_DungeonChatEnable               = false;
+uint32_t    g_DungeonChatCooldown             = 20;
+uint32_t    g_DungeonChatRequestTimeout       = 30;
 
 // --------------------------------------------
 // Think Mode Support
@@ -406,6 +409,9 @@ void LoadOllamaChatConfig()
 
     g_DebugEnabled                    = sConfigMgr->GetOption<bool>("OllamaChat.DebugEnabled", false);
     g_DebugShowFullPrompt             = sConfigMgr->GetOption<bool>("OllamaChat.DebugShowFullPrompt", false);
+    g_DungeonChatEnable               = sConfigMgr->GetOption<bool>("OllamaChat.DungeonChat.Enable", false);
+    g_DungeonChatCooldown             = sConfigMgr->GetOption<uint32_t>("OllamaChat.DungeonChat.Cooldown", 20);
+    g_DungeonChatRequestTimeout       = sConfigMgr->GetOption<uint32_t>("OllamaChat.DungeonChat.RequestTimeout", 30);
 
     g_MinRandomInterval               = sConfigMgr->GetOption<uint32_t>("OllamaChat.MinRandomInterval", 45);
     g_MaxRandomInterval               = sConfigMgr->GetOption<uint32_t>("OllamaChat.MaxRandomInterval", 180);

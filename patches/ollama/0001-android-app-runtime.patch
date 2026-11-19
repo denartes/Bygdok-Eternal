@@ -1,0 +1,33 @@
+diff --git a/ml/backend/ggml/ggml.go b/ml/backend/ggml/ggml.go
+--- a/ml/backend/ggml/ggml.go
++++ b/ml/backend/ggml/ggml.go
+@@ -1,6 +1,7 @@
+ package ggml
+ 
+-// #cgo linux LDFLAGS: -lrt -lpthread -ldl -lstdc++ -lm
++// #cgo linux,!android LDFLAGS: -lrt -lpthread -ldl -lstdc++ -lm
++// #cgo android LDFLAGS: -ldl -lc++ -lm
+ // #cgo windows LDFLAGS: -lpthread
+ // #cgo CPPFLAGS: -I${SRCDIR}/ggml/include
+ // #include <stdlib.h>
+diff --git a/ml/path.go b/ml/path.go
+--- a/ml/path.go
++++ b/ml/path.go
+@@ -28,6 +28,8 @@ var LibOllamaPath string = func() string {
+ 		libPath = filepath.Join(filepath.Dir(exe), "lib", "ollama")
+ 	case "linux":
+ 		libPath = filepath.Join(filepath.Dir(exe), "..", "lib", "ollama")
++	case "android":
++		libPath = filepath.Dir(exe)
+ 	case "darwin":
+ 		libPath = filepath.Dir(exe)
+ 	}
+diff --git a/llm/llm_linux.go b/llm/llm_linux.go
+--- a/llm/llm_linux.go
++++ b/llm/llm_linux.go
+@@ -4,4 +4,4 @@ import (
+ 	"syscall"
+ )
+ 
+-var LlamaServerSysProcAttr = &syscall.SysProcAttr{}
++var LlamaServerSysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}

@@ -1,0 +1,6 @@
+.gradle/
+build/
+.gradle/
+app/src/main/assets/
+app/src/main/jniLibs/
+Configure*
