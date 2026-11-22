@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.chaquo.python")
 }
 
 val generatedModuleConfigAssetsDir = layout.buildDirectory.dir("generated/module-config-assets")
@@ -18,6 +19,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.2.0"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -48,6 +52,20 @@ android {
         // The embedded native binaries are ELF executables, not real shared
         // libraries; keep their original bytes uncompressed and unmodified.
         jniLibs.useLegacyPackaging = true
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.10"
+        pip {
+            install("-r", "requirements-llm-chatter.txt")
+        }
+    }
+    sourceSets {
+        getByName("main") {
+            srcDir("../../modules/mod-llm-chatter/tools")
+        }
     }
 }
 

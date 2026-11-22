@@ -1,0 +1,30 @@
+diff --git a/src/common/Utilities/EventMap.h b/src/common/Utilities/EventMap.h
+--- a/src/common/Utilities/EventMap.h
++++ b/src/common/Utilities/EventMap.h
+@@ -140,3 +140,8 @@
+     void ScheduleEvent(EventId eventId, Milliseconds minTime, Milliseconds maxTime, GroupIndex group = 0u, PhaseIndex phase = 0u);
++    void ScheduleEvent(EventId eventId, uint32 time) { ScheduleEvent(eventId, Milliseconds(time)); }
++    void ScheduleEvent(EventId eventId, uint32 minTime, uint32 maxTime)
++    {
++        ScheduleEvent(eventId, Milliseconds(minTime), Milliseconds(maxTime));
++    }
+ 
+     /**
+@@ -161,3 +166,8 @@
+     void RescheduleEvent(EventId eventId, Milliseconds minTime, Milliseconds maxTime, GroupIndex group = 0u, PhaseIndex phase = 0u);
++    void RescheduleEvent(EventId eventId, uint32 time) { RescheduleEvent(eventId, Milliseconds(time)); }
++    void RescheduleEvent(EventId eventId, uint32 minTime, uint32 maxTime)
++    {
++        RescheduleEvent(eventId, Milliseconds(minTime), Milliseconds(maxTime));
++    }
+ 
+     /**
+@@ -176,3 +186,8 @@
+     void Repeat(Milliseconds minTime, Milliseconds maxTime);
++    void Repeat(uint32 time) { Repeat(Milliseconds(time)); }
++    void Repeat(uint32 minTime, uint32 maxTime)
++    {
++        Repeat(Milliseconds(minTime), Milliseconds(maxTime));
++    }
+ 
+     /**

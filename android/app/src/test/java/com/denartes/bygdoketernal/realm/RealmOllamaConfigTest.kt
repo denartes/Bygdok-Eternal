@@ -7,17 +7,30 @@ import org.junit.Test
 
 class RealmOllamaConfigTest {
     @Test
-    fun `guild mode opts in and quiets native chatter without disabling bots`() {
-        assertFalse(RealmOllamaConfig.guildRelationships("OllamaChat.Enable = 1"))
-        assertTrue(RealmOllamaConfig.guildRelationships("OllamaChat.GuildRelationships.Enable = 1"))
-        val saved = "AiPlayerbot.Enabled = 1\nAiPlayerbot.RandomBotTalk = 1\nAiPlayerbot.EnableBroadcasts = 1"
+    fun `Ollama dependency path excludes server libraries that shadow Android Vulkan dependencies`() {
+        assertEquals(listOf("libc++_shared.so", "libggml-base.so"), RealmOllamaConfig.requiredLibraries)
+        assertFalse(RealmOllamaConfig.requiredLibraries.contains("liblzma.so"))
+        val root = java.nio.file.Files.createTempDirectory("ollama-libraries-test").toFile()
+        try {
+            val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+                RealmOllamaConfig.isolatedLibraryPath(root, java.io.File(root, "missing-native"))
+            }
+            assertTrue(error.message.orEmpty().contains("libc++_shared.so"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `native playerbots chatter is quieted without disabling bots`() {
+        val saved = "Playerbots.Enabled = 1\nPlayerbots.RandomBotTalk = 1\nPlayerbots.EnableBroadcasts = 1"
         val runtime = RealmModConfig.values(RealmOllamaConfig.quietPlayerbotsConfig(saved))
-        assertEquals("1", runtime["AiPlayerbot.Enabled"])
+        assertEquals("1", runtime["Playerbots.Enabled"])
         for (setting in listOf("RandomBotTalk", "EnableBroadcasts", "BroadcastChanceGuildManagement",
             "RandomBotSuggestDungeons", "RandomBotEmote", "EnableGreet", "InviteChat", "RandomBotSayWithoutMaster")) {
-            assertEquals(setting, "0", runtime["AiPlayerbot.$setting"])
+            assertEquals(setting, "0", runtime["Playerbots.$setting"])
         }
-        assertEquals("1", RealmModConfig.values(saved)["AiPlayerbot.RandomBotTalk"])
+        assertEquals("1", RealmModConfig.values(saved)["Playerbots.RandomBotTalk"])
     }
 
     @Test
@@ -39,10 +52,18 @@ class RealmOllamaConfigTest {
 
     private val remote = """
         [worldserver]
-        OllamaChat.Enable = 1
-        OllamaChat.Url = http://192.168.1.10:11434/api/generate
-        OllamaChat.Model = remote-model
-        OllamaChat.DungeonChat.Enable = 1
+        LLMChatter.Enable = 1
+        LLMChatter.Provider = openai_compatible
+        LLMChatter.OpenAICompatible.BaseUrl = http://192.168.1.10:11434/v1
+        LLMChatter.Model = remote-model
+        LLMChatter.Database.Host = localhost
+        LLMChatter.Database.Port = 3306
+        LLMChatter.Database.User = root
+        LLMChatter.Database.Password = acore
+        LLMChatter.RuntimeDir =
+        LLMChatter.RequestLog.Path = /logs/llm_requests.jsonl
+        LLMChatter.HealthCheck.LogPath =
+        LLMChatter.Ollama.BaseUrl = http://localhost:11434
     """.trimIndent()
 
     @Test
@@ -60,15 +81,48 @@ class RealmOllamaConfigTest {
     }
 
     @Test
-    fun `runtime override selects loopback and small model without changing saved preferences`() {
+    fun `runtime override selects local provider without changing saved preferences`() {
         val selected = RealmOllamaConfig.selectManaged(remote, true)
         val runtime = RealmModConfig.values(RealmOllamaConfig.localRuntimeConfig(selected))
-        assertEquals("http://127.0.0.1:11435/api/generate", runtime["OllamaChat.Url"])
-        assertEquals("qwen2.5:0.5b", runtime["OllamaChat.Model"])
-        assertEquals("1", runtime["OllamaChat.MaxConcurrentQueries"])
-        assertEquals("2048", runtime["OllamaChat.NumCtx"])
-        assertEquals("1", runtime["OllamaChat.DungeonChat.Enable"])
-        assertEquals("remote-model", RealmModConfig.values(selected)["OllamaChat.Model"])
+        assertEquals("ollama", runtime["LLMChatter.Provider"])
+        assertEquals("http://127.0.0.1:11435", runtime["LLMChatter.Ollama.BaseUrl"])
+        assertEquals("remote-model:latest", runtime["LLMChatter.Model"])
+        assertEquals("0", runtime["LLMChatter.GroupChatter.PreCacheEnable"])
+        assertEquals("openai_compatible", RealmModConfig.values(selected)["LLMChatter.Provider"])
+        assertEquals("remote-model", RealmModConfig.values(selected)["LLMChatter.Model"])
+    }
+
+    @Test
+    fun `managed runtime respects selected model and normalizes only missing tags`() {
+        for ((selected, expected) in listOf(
+            "llama3.2:1b" to "llama3.2:1b",
+            "\"llama3.2:1b\"" to "llama3.2:1b",
+            "qwen2.5:0.5b" to "qwen2.5:0.5b",
+            "llama3.2" to "llama3.2:latest",
+            "owner/model" to "owner/model:latest",
+            "localhost:5000/owner/model" to "localhost:5000/owner/model:latest"
+        )) {
+            val config = RealmModConfig.replace(remote, mapOf("LLMChatter.Model" to selected))
+            assertEquals(expected, RealmOllamaConfig.selectedModel(config))
+            assertEquals(expected, RealmModConfig.values(RealmOllamaConfig.localRuntimeConfig(config))["LLMChatter.Model"])
+            assertEquals(selected, RealmModConfig.values(config)["LLMChatter.Model"])
+        }
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            RealmOllamaConfig.selectedModel("LLMChatter.Model =\n")
+        }
+    }
+
+    @Test
+    fun `bridge runtime uses the embedded database account and app-private paths`() {
+        val runtimeRoot = java.io.File("build/test-llm-chatter")
+        val runtime = RealmModConfig.values(RealmOllamaConfig.bridgeRuntimeConfig(remote, runtimeRoot))
+        assertEquals("127.0.0.1", runtime["LLMChatter.Database.Host"])
+        assertEquals("acore", runtime["LLMChatter.Database.User"])
+        assertEquals("acore", runtime["LLMChatter.Database.Password"])
+        assertEquals(java.io.File(runtimeRoot, "tmp").absolutePath, runtime["LLMChatter.RuntimeDir"])
+        assertEquals(java.io.File(runtime["LLMChatter.RuntimeDir"], "bridge.log").absolutePath,
+            RealmOllamaConfig.bridgeLogFile(runtimeRoot).absolutePath)
+        assertEquals(java.io.File(runtimeRoot, "logs/llm_requests.jsonl").absolutePath, runtime["LLMChatter.RequestLog.Path"])
     }
 
     @Test

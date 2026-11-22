@@ -35,17 +35,55 @@ class RealmModConfigTest {
     }
 
     @Test
+    fun `legacy ollama chat settings migrate into llm chatter config`() {
+        val directory = Files.createTempDirectory("realm-mod-migration").toFile()
+        try {
+            val chatter = RealmMods.all.single { it.id == "mod-llm-chatter" }
+            val legacy = File(directory, "mod_ollama_chat.conf")
+            legacy.writeText("""
+                OllamaChat.Enable = 1
+                OllamaChat.Model = llama3.2:1b
+                OllamaChat.Url = http://localhost:11434/api/generate
+                Bygdok.Ollama.Managed = 1
+                Bygdok.Ollama.AllowModelDownload = 1
+            """.trimIndent())
+            val store = RealmModConfigStore(directory) { definition ->
+                if (definition == chatter) """
+                    LLMChatter.Enable = 0
+                    LLMChatter.Provider = ollama
+                    LLMChatter.Model = qwen2.5:0.5b
+                    LLMChatter.Ollama.BaseUrl = http://127.0.0.1:11435
+                    Bygdok.Ollama.Managed = 0
+                    Bygdok.Ollama.AllowModelDownload = 0
+                """.trimIndent() else defaults
+            }
+
+            val migrated = RealmModConfig.values(store.load(chatter))
+
+            assertEquals("1", migrated["LLMChatter.Enable"])
+            assertEquals("llama3.2:1b", migrated["LLMChatter.Model"])
+            assertEquals("http://localhost:11434", migrated["LLMChatter.Ollama.BaseUrl"])
+            assertEquals("1", migrated[RealmOllamaConfig.MANAGED])
+            assertEquals("1", migrated[RealmOllamaConfig.DOWNLOAD])
+            assertTrue(File(directory, chatter.configFile).isFile)
+            assertTrue(legacy.isFile)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `playerbots dependency affects effective configs without losing user preferences`() {
         val configs = RealmMods.all.associateWith { definition ->
             "[worldserver]\n" + definition.enableKeys.joinToString("\n") { "$it = 1" } + "\n"
         }.toMutableMap()
-        configs[RealmMods.playerbots] = "AiPlayerbot.Enabled = 0\n"
+        configs[RealmMods.playerbots] = "Playerbots.Enabled = 0\n"
         val runtime = RealmModConfig.runtimeConfigs(configs)
         for (dependent in RealmMods.all.filter { it.requiresPlayerbots }) {
             assertFalse(RealmModConfig.enabled(dependent, runtime.getValue(dependent)))
             assertTrue(RealmModConfig.enabled(dependent, configs.getValue(dependent)))
         }
-        configs[RealmMods.playerbots] = "AiPlayerbot.Enabled = 1\n"
+        configs[RealmMods.playerbots] = "Playerbots.Enabled = 1\n"
         assertTrue(RealmModConfig.runtimeConfigs(configs)
             .filterKeys { it.requiresPlayerbots }.all { (mod, text) -> RealmModConfig.enabled(mod, text) })
     }

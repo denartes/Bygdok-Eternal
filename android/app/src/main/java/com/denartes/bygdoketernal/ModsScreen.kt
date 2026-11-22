@@ -107,7 +107,7 @@ fun ModsScreen(editable: Boolean, onEditingChanged: (Boolean) -> Unit, modifier:
                 name
             }
             driverName = driver
-            message = "Custom driver imported: $driver. Ollama will verify it on the next realm start."
+            message = "Custom driver imported: $driver. Local Ollama will verify it on the next realm start."
         }
     }
 
@@ -166,11 +166,11 @@ fun ModsScreen(editable: Boolean, onEditingChanged: (Boolean) -> Unit, modifier:
                                 style = MaterialTheme.typography.bodySmall
                             )
                             if (mod.warning.isNotEmpty()) Text(mod.warning, style = MaterialTheme.typography.bodySmall)
-                            if (mod.id == "mod-ollama-chat" && config != null) {
+                            if (mod.id == "mod-llm-chatter" && config != null) {
                                 val managed = RealmOllamaConfig.managed(config)
                                 Text(
-                                    if (managed) "On-device Ollama: qwen2.5:0.5b. Missing model files download at the next realm start."
-                                    else "Remote Ollama selected. On-device mode runs inside Bygdok without Termux.",
+                                    if (managed) "On-device Ollama uses LLMChatter.Model from Configure. Missing model files download at the next realm start; size depends on your selection."
+                                    else "The selected provider is configured below. On-device mode runs inside Bygdok without Termux.",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 TextButton(
@@ -183,17 +183,17 @@ fun ModsScreen(editable: Boolean, onEditingChanged: (Boolean) -> Unit, modifier:
                                                 }
                                             }
                                             configs = configs + (mod to withContext(Dispatchers.IO) { store.load(mod) })
-                                            message = if (managed) "Remote Ollama selected. Saved endpoint settings retained."
-                                                else "On-device Ollama selected. Enable Ollama Chat, then start the realm to download the model."
+                                            message = if (managed) "Use the configured provider selected in LLM Chatter settings."
+                                                else "On-device Ollama selected. Enable LLM Chatter, then start the realm to download the model."
                                         }
                                     }
-                                ) { Text(if (managed) "Use remote Ollama" else "Use on-device Ollama (allows ~400 MB download)") }
+                                ) { Text(if (managed) "Use configured provider" else "Use on-device Ollama (allows model download)") }
                                 Text(
                                    driverName?.let { "Custom Vulkan driver: $it" } ?: "Vulkan driver: Android system",
                                    style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
-                                   "Import only trusted AdrenoTools driver ZIPs: native driver code runs with Ollama's app permissions. Only local AI uses this driver; failed verification uses CPU.",
+                                   "Import only trusted AdrenoTools driver ZIPs: native driver code runs with app permissions. Only local Ollama uses this driver; failed verification uses CPU.",
                                    style = MaterialTheme.typography.bodySmall
                                 )
                                 Row {

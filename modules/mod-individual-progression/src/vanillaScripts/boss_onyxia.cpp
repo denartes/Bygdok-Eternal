@@ -344,25 +344,25 @@ public:
                 case EVENT_SPELL_WINGBUFFET:
                 {
                     DoCast(SPELL_WINGBUFFET);
-                    events.RepeatEvent(urand(15000, 30000));
+                    events.Repeat(Milliseconds(urand(15000, 30000)));
                     break;
                 }
                 case EVENT_SPELL_FLAMEBREATH:
                 {
                     DoCast(SPELL_FLAMEBREATH);
-                    events.RepeatEvent(urand(10000, 20000));
+                    events.Repeat(Milliseconds(urand(10000, 20000)));
                     break;
                 }
                 case EVENT_SPELL_TAILSWEEP:
                 {
                     DoCastAOE(SPELL_TAILSWEEP);
-                    events.RepeatEvent(urand(15000, 20000));
+                    events.Repeat(Milliseconds(urand(15000, 20000)));
                     break;
                 }
                 case EVENT_SPELL_CLEAVE:
                 {
                     DoCastVictim(SPELL_CLEAVE);
-                    events.RepeatEvent(urand(2000, 5000));
+                    events.Repeat(Milliseconds(urand(2000, 5000)));
                     break;
                 }
                 case EVENT_START_PHASE_2:
@@ -406,13 +406,13 @@ public:
                 case EVENT_SUMMON_LAIR_GUARD:
                 {
                     me->CastSpell(-101.654f, -214.491f, -80.70f, SPELL_SUMMON_LAIR_GUARD, true);
-                    events.RepeatEvent(30000);
+                    events.Repeat(30s);
                     break;
                 }
                 case EVENT_WHELP_SPAM:
                 {
                     whelpSpam = true;
-                    events.RepeatEvent(90000);
+                    events.Repeat(90s);
                     break;
                 }
                 case EVENT_LAND:
@@ -521,7 +521,7 @@ public:
                 case EVENT_SPELL_BELLOWINGROAR:
                 {
                     DoCastAOE(SPELL_BELLOWINGROAR);
-                    events.RepeatEvent(22000);
+                    events.Repeat(22s);
                     events.ScheduleEvent(EVENT_ERUPTION, 0);
                     break;
                 }
@@ -539,7 +539,7 @@ public:
                     float dist  = rand_norm() * 4.0f;
                     me->CastSpell(-33.18f + cos(angle) * dist, -258.80f + sin(angle) * dist, -89.0f, SPELL_SUMMON_WHELP, true);
                     me->CastSpell(-32.535f + cos(angle) * dist, -170.190f + sin(angle) * dist, -89.0f, SPELL_SUMMON_WHELP, true);
-                    events.RepeatEvent(30000);
+                    events.Repeat(30s);
                     break;
                 }
             }

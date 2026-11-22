@@ -1,0 +1,12 @@
+diff --git a/src/common/Threading/ProcessPriority.cpp b/src/common/Threading/ProcessPriority.cpp
+--- a/src/common/Threading/ProcessPriority.cpp
++++ b/src/common/Threading/ProcessPriority.cpp
+@@ -90,6 +90,5 @@
+         else
+         {
+             CPU_ZERO(&mask);
+-            sched_getaffinity(0, sizeof(mask), &mask);
+-            LOG_INFO(logChannel, "Using processors (bitmask, hex): {:x}", *(__cpu_mask*)(&mask));
++            LOG_INFO(logChannel, "Using processors (bitmask, hex): {:x}", affinity);
+         }
+     }

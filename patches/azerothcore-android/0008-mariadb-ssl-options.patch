@@ -1,0 +1,22 @@
+diff --git a/src/server/database/Database/MySQLConnection.cpp b/src/server/database/Database/MySQLConnection.cpp
+--- a/src/server/database/Database/MySQLConnection.cpp
++++ b/src/server/database/Database/MySQLConnection.cpp
+@@ -136,10 +136,18 @@
+     if (m_connectionInfo.ssl != "")
+     {
++#ifdef MARIADB_BASE_VERSION
++        if (m_connectionInfo.ssl == "ssl")
++        {
++            my_bool verifyServerCertificate = true;
++            mysql_options(mysqlInit, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verifyServerCertificate);
++        }
++#else
+         mysql_ssl_mode opt_use_ssl = SSL_MODE_DISABLED;
+         if (m_connectionInfo.ssl == "ssl")
+         {
+             opt_use_ssl = SSL_MODE_REQUIRED;
+         }
+ 
+         mysql_options(mysqlInit, MYSQL_OPT_SSL_MODE, (char const*)&opt_use_ssl);
++#endif
+     }

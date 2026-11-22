@@ -1,0 +1,8 @@
+diff --git a/src/server/game/Entities/Unit/Unit.cpp b/src/server/game/Entities/Unit/Unit.cpp
+--- a/src/server/game/Entities/Unit/Unit.cpp
++++ b/src/server/game/Entities/Unit/Unit.cpp
+@@ -670,3 +670,3 @@
+     data << GetPositionX() << GetPositionY() << GetPositionZ();
+-    data << GameTime::GetGameTimeMS().count();
++    data << static_cast<uint32>(GameTime::GetGameTimeMS().count());
+     data << uint8(0);

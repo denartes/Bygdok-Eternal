@@ -28,16 +28,16 @@ object RealmMods {
         RealmModDefinition("mod-npc-enchanter", "NPC Enchanter", "npc_enchanter.conf", listOf("Enchanter.Enable")),
         RealmModDefinition("mod-reagent-bank", "Reagent Bank", "reagent_bank.conf", listOf("ReagentBank.Enable"),
             warning = "Stored items are retained but inaccessible while disabled."),
-        RealmModDefinition("mod-playerbots", "Playerbots", "playerbots.conf", listOf("AiPlayerbot.Enabled"),
-            warning = "Turning this off also disables Guild Mate, Bot Level Brackets and Ollama Chat for that server session."),
+        RealmModDefinition("mod-playerbots", "Playerbots", "playerbots.conf", listOf("Playerbots.Enabled"),
+            warning = "Turning this off also disables Guild Mate, Bot Level Brackets and LLM Chatter for that server session."),
         RealmModDefinition("mod-player-bot-level-brackets", "Bot Level Brackets", "mod_player_bot_level_brackets.conf", listOf("BotLevelBrackets.Enabled"), true),
         RealmModDefinition("mod-individual-progression", "Individual Progression", "individualProgression.conf", listOf("IndividualProgression.Enable"),
             warning = "Disabling runtime behavior does not undo world SQL changes or restore a stock WotLK realm."),
         RealmModDefinition("mod-guild-mate", "Guild Mate", "mod_guild_mate.conf", listOf("GuildMate.Enable"), true),
         RealmModDefinition("mod-transmog-plus", "Transmog Plus", "mod_transmog_plus.conf", listOf("Transmog.Enable"),
             warning = "Saved appearances remain when disabled."),
-        RealmModDefinition("mod-ollama-chat", "Ollama Chat", "mod_ollama_chat.conf", listOf("OllamaChat.Enable"), true,
-            "Choose app-managed on-device Ollama, or configure a remote Ollama API endpoint and model.")
+        RealmModDefinition("mod-llm-chatter", "LLM Chatter", "mod_llm_chatter.conf", listOf("LLMChatter.Enable"), true,
+            "The bridge starts with the realm. Configure a local Ollama or hosted provider in this file.")
     )
     val playerbots = all.single { it.id == "mod-playerbots" }
 }
@@ -83,6 +83,23 @@ object RealmModConfig {
 
     fun merge(defaults: String, overrides: String?): String =
         replace(defaults, overrides?.let(::values).orEmpty())
+
+    fun migrateLegacyOllamaChat(text: String): String {
+        val legacy = values(text)
+        val migrated = linkedMapOf<String, String>()
+        legacy["OllamaChat.Enable"]?.let { migrated["LLMChatter.Enable"] = it }
+        legacy["OllamaChat.Model"]?.let { migrated["LLMChatter.Model"] = it }
+        legacy["OllamaChat.Url"]?.let { value ->
+            migrated["LLMChatter.Ollama.BaseUrl"] = value.trim().trim('"')
+                .trimEnd('/')
+                .removeSuffix("/api/generate")
+                .removeSuffix("/api/chat")
+        }
+        for (key in listOf("Bygdok.Ollama.Managed", "Bygdok.Ollama.AllowModelDownload")) {
+            legacy[key]?.let { migrated[key] = it }
+        }
+        return replace("", migrated)
+    }
 
     fun replace(text: String, settings: Map<String, String>): String {
         values(text)
@@ -142,8 +159,21 @@ class RealmModConfigStore(
     private val defaults: (RealmModDefinition) -> String
 ) {
     fun load(mod: RealmModDefinition): String {
+        migrateLegacyConfig(mod)
         val saved = File(directory, mod.configFile)
         return RealmModConfig.merge(defaults(mod), if (saved.isFile) saved.readText() else null)
+    }
+
+    private fun migrateLegacyConfig(mod: RealmModDefinition) {
+        if (mod.id != "mod-llm-chatter") return
+        val target = File(directory, mod.configFile)
+        val legacy = File(directory, "mod_ollama_chat.conf")
+        if (target.isFile || !legacy.isFile) return
+        val migrated = RealmModConfig.merge(
+            defaults(mod),
+            RealmModConfig.migrateLegacyOllamaChat(legacy.readText())
+        )
+        save(mod, migrated)
     }
 
     fun save(mod: RealmModDefinition, text: String) {
@@ -173,6 +203,7 @@ class RealmModConfigStore(
     }
 
     fun install(destination: File, portableConfigs: Map<RealmModDefinition, String> = emptyMap()) {
+        RealmMods.all.forEach(::migrateLegacyConfig)
         val configs = RealmMods.all.associateWith { mod ->
             val saved = File(directory, mod.configFile)
             val portable = RealmModConfig.merge(defaults(mod), portableConfigs[mod])

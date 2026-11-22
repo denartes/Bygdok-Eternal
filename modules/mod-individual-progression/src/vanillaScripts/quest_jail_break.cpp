@@ -101,10 +101,11 @@ public:
             _instance = creature->GetInstanceScript();
         }
 
-        void SetGUID(ObjectGuid playerGUID, int32 /*id*/) override
+        void SetGUID(ObjectGuid const& playerGUID, int32 /*id*/) override
         {
             _playerGUID = playerGUID;
-            Start(true, false, playerGUID, 0, false, false);
+            me->SetWalk(true);
+            Start(true, playerGUID, nullptr, false, false);
             me->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PC);
         }
 
@@ -458,7 +459,8 @@ public:
         {
             if (actionId == 0)
             {
-                Start(false, true, ObjectGuid::Empty, 0, false, false);
+                me->SetWalk(false);
+                Start(false, ObjectGuid::Empty, nullptr, false, false);
             }
         }
     };

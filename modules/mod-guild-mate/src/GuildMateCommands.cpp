@@ -202,7 +202,7 @@ public:
             target->GetPositionX(), target->GetPositionY(), target->GetPositionZ());
 
         std::string zoneBracketConfig = sConfigMgr->GetOption<std::string>(
-            "AiPlayerbot.ZoneBracket." + std::to_string(target->GetZoneId()), "", false);
+            "Playerbots.ZoneBracket." + std::to_string(target->GetZoneId()), "", false);
         if (!zoneBracketConfig.empty())
         {
             uint32 bracketMin = 0;
@@ -224,7 +224,7 @@ public:
         }
 
         // Mode: Autonomous vs Player-controlled
-        bool hasRealMaster = ai->HasRealPlayerMaster();
+        bool hasRealMaster = sGuildMateMgr->IsUnderPlayerControl(target);
         Player* master = ai->GetMaster();
         if (hasRealMaster && master && master != target)
         {
@@ -251,13 +251,13 @@ public:
             target->IsMounted() ? "yes" : "no");
 
         handler->PSendSysMessage("Config: BotActiveAlone={} | SmartScale={} | ForceGuild={} | AutoTeleportForLevel={}",
-            sPlayerbotAIConfig->botActiveAlone,
-            sPlayerbotAIConfig->botActiveAloneSmartScale ? "yes" : "no",
-            sPlayerbotAIConfig->BotActiveAloneForceWhenInGuild ? "yes" : "no",
-            sPlayerbotAIConfig->autoTeleportForLevel ? "yes" : "no");
+            sPlayerbotAIConfig.BotActiveAlone,
+            sPlayerbotAIConfig.BotActiveAloneSmartScale ? "yes" : "no",
+            sPlayerbotAIConfig.BotActiveAloneForceWhenInGuild ? "yes" : "no",
+            sPlayerbotAIConfig.AutoTeleportForLevel ? "yes" : "no");
         handler->PSendSysMessage("Config: NewRpg={} | AutoDoQuests={} | GuildMatePeriodicTeleport={}",
-            sPlayerbotAIConfig->enableNewRpgStrategy ? "yes" : "no",
-            sPlayerbotAIConfig->autoDoQuests ? "yes" : "no",
+            sPlayerbotAIConfig.EnableNewRpgStrategy ? "yes" : "no",
+            sPlayerbotAIConfig.AutoDoQuests ? "yes" : "no",
             sConfigMgr->GetOption<bool>("GuildMate.PeriodicTeleport", true) ? "yes" : "no");
 
         Unit* currentTarget = nullptr;
@@ -318,14 +318,14 @@ public:
                     if (obj)
                     {
                         handler->PSendSysMessage("RPG Target: {} (map:{} x:{:.1f} y:{:.1f})", 
-                            obj->GetName(), rpgTarget.getMapId(), rpgTarget.getX(), rpgTarget.getY());
+                            obj->GetName(), rpgTarget.GetMapId(), rpgTarget.GetPositionX(), rpgTarget.GetPositionY());
                     }
                     else
                     {
                         // Object not loaded - show GUID and position
                         handler->PSendSysMessage("RPG Target GUID: {} (map:{} x:{:.1f} y:{:.1f})",
                             static_cast<ObjectGuid const&>(rpgTarget).ToString(),
-                            rpgTarget.getMapId(), rpgTarget.getX(), rpgTarget.getY());
+                            rpgTarget.GetMapId(), rpgTarget.GetPositionX(), rpgTarget.GetPositionY());
                     }
                 }
             }
@@ -366,18 +366,18 @@ public:
         // ========== RANDOMPLAYERBOTMGR EVENTS ==========
         // These events control how ProcessBot() handles maintenance
         uint32 botId = target->GetGUID().GetCounter();
-        uint32 deadEvent = sRandomPlayerbotMgr->GetValue(botId, "dead");
-        uint32 reviveEvent = sRandomPlayerbotMgr->GetValue(botId, "revive");
-        uint32 teleportEvent = sRandomPlayerbotMgr->GetValue(botId, "teleport");
-        uint32 randomizeEvent = sRandomPlayerbotMgr->GetValue(botId, "randomize");
-        uint32 updateEvent = sRandomPlayerbotMgr->GetValue(botId, "update");
+        uint32 deadEvent = sRandomPlayerbotMgr.GetValue(botId, "dead");
+        uint32 reviveEvent = sRandomPlayerbotMgr.GetValue(botId, "revive");
+        uint32 teleportEvent = sRandomPlayerbotMgr.GetValue(botId, "teleport");
+        uint32 randomizeEvent = sRandomPlayerbotMgr.GetValue(botId, "randomize");
+        uint32 updateEvent = sRandomPlayerbotMgr.GetValue(botId, "update");
 
         handler->PSendSysMessage("=== ProcessBot Events ===");
         handler->PSendSysMessage("  dead: {} | revive: {} | teleport: {} | randomize: {} | update: {}",
             deadEvent, reviveEvent, teleportEvent, randomizeEvent, updateEvent);
 
         // Show if this bot would be processed by RandomPlayerbotMgr
-        bool isRandomBot = sRandomPlayerbotMgr->IsRandomBot(target);
+        bool isRandomBot = sRandomPlayerbotMgr.IsRandomBot(target);
         bool isGuildMate = sGuildMateMgr->IsGuildMate(target);
         bool inGroup = target->GetGroup() != nullptr;
         bool isDead = target->isDead();

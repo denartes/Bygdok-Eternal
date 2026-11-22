@@ -144,8 +144,8 @@ public:
             BossAI::Reset();
             me->SetPosition(me->GetHomePosition());
             events.Reset();
-            events.RescheduleEvent(EVENT_MARK_CAST, 20000);
-            events.RescheduleEvent(EVENT_BERSERK, 600000);
+            events.RescheduleEvent(EVENT_MARK_CAST, Milliseconds(20000));
+            events.RescheduleEvent(EVENT_BERSERK, Milliseconds(600000));
             summons.DespawnAll(); // despawn spirits
             if ((me->GetEntry() != NPC_LADY_BLAUMEUX_40 && me->GetEntry() != NPC_SIR_ZELIEK_40))
             {
@@ -367,4 +367,3 @@ void AddSC_boss_four_horsemen_40()
     new boss_four_horsemen_40();
     RegisterSpellScript(spell_four_horsemen_mark_aura);
 }
-

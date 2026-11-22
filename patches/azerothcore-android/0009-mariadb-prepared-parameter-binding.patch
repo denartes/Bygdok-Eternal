@@ -1,0 +1,23 @@
+diff --git a/src/server/database/Database/MySQLConnection.cpp b/src/server/database/Database/MySQLConnection.cpp
+--- a/src/server/database/Database/MySQLConnection.cpp
++++ b/src/server/database/Database/MySQLConnection.cpp
+@@ -229,8 +229,8 @@
+     MYSQL_BIND* msql_BIND = m_mStmt->GetBind();
+ 
+     uint32 _s = getMSTime();
+ 
+-#if MYSQL_VERSION_ID >= 80300
++#if MYSQL_VERSION_ID >= 80300 && !defined(MARIADB_BASE_VERSION)
+     if (mysql_stmt_bind_named_param(msql_STMT, msql_BIND, m_mStmt->GetParameterCount(), nullptr))
+ #else
+     if (mysql_stmt_bind_param(msql_STMT, msql_BIND))
+@@ -289,8 +289,8 @@
+     MYSQL_BIND* msql_BIND = m_mStmt->GetBind();
+ 
+     uint32 _s = getMSTime();
+ 
+-#if MYSQL_VERSION_ID >= 80300
++#if MYSQL_VERSION_ID >= 80300 && !defined(MARIADB_BASE_VERSION)
+     if (mysql_stmt_bind_named_param(msql_STMT, msql_BIND, m_mStmt->GetParameterCount(), nullptr))
+ #else
+     if (mysql_stmt_bind_param(msql_STMT, msql_BIND))
