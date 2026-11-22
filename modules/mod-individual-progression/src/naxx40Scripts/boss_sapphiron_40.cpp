@@ -309,7 +309,7 @@ public:
                         {
                             cr->GetMotionMaster()->MoveRandom(40);
                         }
-                        events.RepeatEvent(RAID_MODE(8000, 6500, 6500, 6500));
+                        events.Repeat(Milliseconds(RAID_MODE(8000, 6500, 6500, 6500)));
                         return;
                     }
                 case EVENT_FLIGHT_START:
@@ -346,17 +346,17 @@ public:
                         }
 
                         std::vector<Unit*> targets;
-                        auto i = me->GetThreatMgr().GetThreatList().begin();
-                        for (; i != me->GetThreatMgr().GetThreatList().end(); ++i)
+                        for (ThreatReference const* reference : me->GetThreatMgr().GetSortedThreatList())
                         {
-                            if ((*i)->getTarget()->IsPlayer())
+                            Unit* target = reference->GetVictim();
+                            if (target && target->IsPlayer())
                             {
                                 bool inList = false;
                                 if (!blockList.empty())
                                 {
                                     for (GuidList::const_iterator itr = blockList.begin(); itr != blockList.end(); ++itr)
                                     {
-                                        if ((*i)->getTarget()->GetGUID() == *itr)
+                                        if (target->GetGUID() == *itr)
                                         {
                                             inList = true;
                                             break;
@@ -365,7 +365,7 @@ public:
                                 }
                                 if (!inList)
                                 {
-                                    targets.push_back((*i)->getTarget());
+                                    targets.push_back(target);
                                 }
                             }
                         }
@@ -378,7 +378,7 @@ public:
                             blockList.push_back((*itr)->GetGUID());
                             currentTarget = (*itr)->GetGUID();
                             --iceboltCount;
-                            events.ScheduleEvent(EVENT_FLIGHT_ICEBOLT, (me->GetExactDist(*itr) / 13.0f)*IN_MILLISECONDS);
+                            events.ScheduleEvent(EVENT_FLIGHT_ICEBOLT, Milliseconds(static_cast<uint32>((me->GetExactDist(*itr) / 13.0f) * IN_MILLISECONDS)));
                         }
                         else
                         {

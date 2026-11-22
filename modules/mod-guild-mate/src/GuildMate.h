@@ -43,6 +43,7 @@ public:
     // Check if a character is a Guild Mate
     bool IsGuildMate(ObjectGuid::LowType guid);
     bool IsGuildMate(Player* player);
+    bool IsUnderPlayerControl(Player* bot);
 
     // Get statistics
     uint32 GetOnlineCount() const { return playerBots.size(); }
@@ -71,7 +72,6 @@ private:
     bool IsCharacterOnline(ObjectGuid::LowType guid);
 
     // Autonomy lifecycle
-    bool IsUnderPlayerControl(Player* bot);
     bool ShouldRelocateForLevel(Player* bot);
     bool TryRelocateGuildMateForLevel(Player* bot);
     void EnsureLevelAppropriateZone(Player* bot);

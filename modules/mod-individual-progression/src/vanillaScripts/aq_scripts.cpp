@@ -173,7 +173,13 @@ public:
                 return;
 
             if (announce)
-                sWorldSessionMgr->SendZoneText(GLOBAL_TEXT_CHAMPION, player->GetName().c_str());
+            {
+                std::string message = sObjectMgr->GetAcoreStringForDBCLocale(GLOBAL_TEXT_CHAMPION);
+                size_t playerName = message.find("%s");
+                if (playerName != std::string::npos)
+                    message.replace(playerName, 2, player->GetName());
+                player->GetMap()->SendZoneText(player->GetZoneId(), message.c_str());
+            }
 
             eventTimer += 1000;
             eventStage = STAGE_OPEN_GATES;
@@ -244,4 +250,3 @@ void AddSC_aq_scripts()
     new aq_gate();
     new gobject_scarab_gong();
 }
-

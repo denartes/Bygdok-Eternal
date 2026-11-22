@@ -1,0 +1,20 @@
+diff --git a/src/server/database/Database/PreparedStatement.h b/src/server/database/Database/PreparedStatement.h
+--- a/src/server/database/Database/PreparedStatement.h
++++ b/src/server/database/Database/PreparedStatement.h
+@@ -126,6 +126,16 @@
+ protected:
+     template<typename T>
+     Acore::Types::is_non_string_view_v<T> SetValidData(const uint8 index, T const& value);
+ 
++    inline void SetValidData(const uint8 index, long long const& value)
++    {
++        SetValidData<int64>(index, static_cast<int64>(value));
++    }
++
++    inline void SetValidData(const uint8 index, unsigned long long const& value)
++    {
++        SetValidData<uint64>(index, static_cast<uint64>(value));
++    }
++
+     void SetValidData(const uint8 index);
+     void SetValidData(const uint8 index, std::string_view value);

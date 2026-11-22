@@ -6,6 +6,8 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.URL
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -17,30 +19,33 @@ import org.json.JSONObject
 object RealmOllamaConfig {
     const val MANAGED = "Bygdok.Ollama.Managed"
     const val DOWNLOAD = "Bygdok.Ollama.AllowModelDownload"
-    const val GUILD_RELATIONSHIPS = "OllamaChat.GuildRelationships.Enable"
     const val MODEL = "qwen2.5:0.5b"
     const val PORT = 11435
     const val BASE_URL = "http://127.0.0.1:$PORT"
+    val requiredLibraries = listOf("libc++_shared.so", "libggml-base.so")
 
     fun managed(config: String): Boolean =
         RealmModConfig.values(config)[MANAGED]?.lowercase() in setOf("1", "true")
 
-    fun guildRelationships(config: String): Boolean =
-        RealmModConfig.values(config)[GUILD_RELATIONSHIPS]?.lowercase() in setOf("1", "true")
-
     fun quietPlayerbotsConfig(config: String): String = RealmModConfig.replace(config, mapOf(
-        "AiPlayerbot.RandomBotTalk" to "0",
-        "AiPlayerbot.EnableBroadcasts" to "0",
-        "AiPlayerbot.BroadcastChanceGuildManagement" to "0",
-        "AiPlayerbot.RandomBotSuggestDungeons" to "0",
-        "AiPlayerbot.RandomBotEmote" to "0",
-        "AiPlayerbot.EnableGreet" to "0",
-        "AiPlayerbot.InviteChat" to "0",
-        "AiPlayerbot.RandomBotSayWithoutMaster" to "0"
+        "Playerbots.RandomBotTalk" to "0",
+        "Playerbots.EnableBroadcasts" to "0",
+        "Playerbots.BroadcastChanceGuildManagement" to "0",
+        "Playerbots.RandomBotSuggestDungeons" to "0",
+        "Playerbots.RandomBotEmote" to "0",
+        "Playerbots.EnableGreet" to "0",
+        "Playerbots.InviteChat" to "0",
+        "Playerbots.RandomBotSayWithoutMaster" to "0"
     ))
 
     fun downloadAllowed(config: String): Boolean =
         RealmModConfig.values(config)[DOWNLOAD]?.lowercase() in setOf("1", "true")
+
+    fun selectedModel(config: String): String {
+        val model = RealmModConfig.values(config)["LLMChatter.Model"]?.trim()?.trim('"').orEmpty()
+        check(model.isNotEmpty()) { "Set LLMChatter.Model before starting on-device Ollama" }
+        return if (':' in model.substringAfterLast('/')) model else "$model:latest"
+    }
 
     fun selectManaged(config: String, enabled: Boolean): String = RealmModConfig.replace(
         config, mapOf(MANAGED to if (enabled) "1" else "0", DOWNLOAD to if (enabled) "1" else "0")
@@ -53,14 +58,40 @@ object RealmOllamaConfig {
     fun validSelfTestResponse(response: String): Boolean =
         Regex("(4|four)[.!]?", RegexOption.IGNORE_CASE).matches(response.trim())
 
+    fun bridgeRuntimeConfig(config: String, runtimeDir: File): String {
+        val logsDir = File(runtimeDir, "logs").apply { mkdirs() }
+        val tempDir = File(runtimeDir, "tmp").apply { mkdirs() }
+        return RealmModConfig.replace(config, mapOf(
+            "LLMChatter.Database.Host" to "127.0.0.1",
+            "LLMChatter.Database.Port" to "3306",
+            "LLMChatter.Database.User" to "acore",
+            "LLMChatter.Database.Password" to "acore",
+            "LLMChatter.RuntimeDir" to tempDir.absolutePath,
+            "LLMChatter.RequestLog.Path" to File(logsDir, "llm_requests.jsonl").absolutePath,
+            "LLMChatter.HealthCheck.LogPath" to File(logsDir, "healthcheck.log").absolutePath
+        ))
+    }
+
+    fun bridgeLogFile(runtimeDir: File): File = File(runtimeDir, "tmp/bridge.log")
+
+    fun isolatedLibraryPath(root: File, nativeLibraryDir: File): File {
+        val directory = File(root, "provider-libraries")
+        check(directory.isDirectory || directory.mkdirs()) { "Could not create Ollama library directory" }
+        for (name in requiredLibraries) {
+            val source = File(nativeLibraryDir, name)
+            check(source.isFile) { "Required Ollama library is missing: $name" }
+            val link = File(directory, name).toPath()
+            if (Files.exists(link, LinkOption.NOFOLLOW_LINKS)) Files.delete(link)
+            Files.createSymbolicLink(link, source.toPath())
+        }
+        return directory
+    }
+
     fun localRuntimeConfig(config: String): String = RealmModConfig.replace(config, mapOf(
-        "OllamaChat.Url" to "$BASE_URL/api/generate",
-        "OllamaChat.Model" to MODEL,
-        "OllamaChat.MaxConcurrentQueries" to "1",
-        "OllamaChat.NumCtx" to "2048",
-        "OllamaChat.NumThreads" to "2",
-        "OllamaChat.NumPredict" to "48",
-        "OllamaChat.ThinkModeEnableForModule" to "0"
+        "LLMChatter.Provider" to "ollama",
+        "LLMChatter.Model" to selectedModel(config),
+        "LLMChatter.Ollama.BaseUrl" to BASE_URL,
+        "LLMChatter.GroupChatter.PreCacheEnable" to "0"
     ))
 }
 
@@ -70,7 +101,8 @@ class RealmOllama(
     private val nativeLibraryDir: File,
     private val log: (String) -> Unit,
     private val status: (ComponentStatus) -> Unit,
-    private val driverStore: RealmOllamaDriverStore? = null
+    private val driverStore: RealmOllamaDriverStore? = null,
+    private val model: String
 ) {
     private val stopped = AtomicBoolean(false)
     private val connection = AtomicReference<HttpURLConnection?>()
@@ -82,6 +114,7 @@ class RealmOllama(
         val binary = File(nativeLibraryDir, "libollama.so")
         check(binary.isFile) { "This APK does not contain the embedded Ollama runtime; rebuild the app" }
         root.mkdirs()
+        val libraryPath = RealmOllamaConfig.isolatedLibraryPath(root, nativeLibraryDir)
         val models = File(root, "models").also { it.mkdirs() }
         val outputLog = File(root, "ollama.log")
         if (outputLog.length() > 2 * 1024 * 1024) outputLog.writeText("")
@@ -96,7 +129,8 @@ class RealmOllama(
                 environment().apply {
                     put("HOME", root.absolutePath)
                     put("TMPDIR", File(root, "tmp").also { it.mkdirs() }.absolutePath)
-                    put("LD_LIBRARY_PATH", nativeLibraryDir.absolutePath)
+                    // Do not shadow Android's liblzma/libunwindstack dependencies with server libraries.
+                    put("LD_LIBRARY_PATH", libraryPath.absolutePath)
                     put("OLLAMA_LIBRARY_PATH", nativeLibraryDir.absolutePath)
                     put("OLLAMA_HOST", "127.0.0.1:${RealmOllamaConfig.PORT}")
                     put("OLLAMA_MODELS", models.absolutePath)
@@ -141,11 +175,11 @@ class RealmOllama(
         startServer(useVulkan = true)
         val tags = JSONObject(request("/api/tags")).getJSONArray("models")
         val hasModel = (0 until tags.length()).any {
-            tags.getJSONObject(it).getString("name") == RealmOllamaConfig.MODEL
+            tags.getJSONObject(it).getString("name") == model
         }
         if (!hasModel) {
-            check(allowDownload) { "Local model is missing. Enable its download in Mods > Ollama Chat." }
-            log("Downloading ${RealmOllamaConfig.MODEL} (approximately 400 MB). Partial downloads can resume on the next start.")
+            check(allowDownload) { "Local model is missing. Enable its download in Mods > LLM Chatter." }
+            log("Downloading $model. Size depends on the selected model; partial downloads can resume on the next start.")
             pullModel()
         }
         try {
@@ -160,7 +194,7 @@ class RealmOllama(
         val gpuActive = (0 until running.length()).any { running.getJSONObject(it).optLong("size_vram") > 0 }
         log(if (gpuActive) "Vulkan GPU offload active." else "CPU fallback active. See ollama.log for GPU discovery and any compatibility failure.")
         status(ComponentStatus.RUNNING)
-        log("Embedded Ollama ready with ${RealmOllamaConfig.MODEL}")
+        log("Embedded Ollama ready with $model")
     }
 
     private suspend fun startCpuFallback(error: Exception) {
@@ -174,9 +208,9 @@ class RealmOllama(
 
     private fun verifyModel() {
         // Confirm that both the model and runner can load before enabling worldserver chat.
-        log("Loading and verifying ${RealmOllamaConfig.MODEL}...")
+        log("Loading and verifying $model...")
         request("/api/generate", JSONObject()
-            .put("model", RealmOllamaConfig.MODEL)
+            .put("model", model)
             .put("prompt", "What is two plus two? Answer with the number only.")
             .put("stream", false)
             .put("options", JSONObject().put("num_predict", 8).put("num_ctx", 2048)
@@ -241,7 +275,7 @@ class RealmOllama(
     private suspend fun pullModel() {
         var http: HttpURLConnection? = null
         try {
-            http = open("/api/pull", JSONObject().put("model", RealmOllamaConfig.MODEL).put("stream", true).toString(), 120_000)
+            http = open("/api/pull", JSONObject().put("model", model).put("stream", true).toString(), 120_000)
             check(http.responseCode == 200) { "Ollama model download returned HTTP ${http.responseCode}" }
             var lastProgress = ""
             var success = false

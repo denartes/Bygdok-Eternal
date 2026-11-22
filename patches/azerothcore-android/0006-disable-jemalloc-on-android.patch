@@ -1,0 +1,11 @@
+diff --git a/deps/jemalloc/CMakeLists.txt b/deps/jemalloc/CMakeLists.txt
+--- a/deps/jemalloc/CMakeLists.txt
++++ b/deps/jemalloc/CMakeLists.txt
+@@ -13,5 +13,5 @@
+ 
+ include(CheckSymbolExists)
+ 
+-if(CMAKE_SYSTEM_NAME MATCHES "Linux" AND NOT NOJEM)
++if(CMAKE_SYSTEM_NAME MATCHES "Linux" AND NOT NOJEM AND NOT ANDROID AND NOT CMAKE_C_COMPILER MATCHES "android")
+   # We need to generate the jemalloc_def.h header based on platform-specific settings
+   check_symbol_exists(MADV_FREE "sys/mman.h" HAVE_MADV_FREE)

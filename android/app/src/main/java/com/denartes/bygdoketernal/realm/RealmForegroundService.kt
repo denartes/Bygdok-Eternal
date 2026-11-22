@@ -66,6 +66,7 @@ class RealmForegroundService : Service() {
     private var worldserverReadiness: ProcessReadiness? = null
     @Volatile private var ollama: RealmOllama? = null
     private var ollamaMonitorJob: Job? = null
+    @Volatile private var llmChatterBridge: RealmLlmChatterBridge? = null
     @Volatile private var intentionalStop = false
     private var stopJob: Job? = null
     private var logTailJob: Job? = null
@@ -336,7 +337,7 @@ class RealmForegroundService : Service() {
                 markImportedDatabaseSchemas(prepared)
                 val portableModuleConfigs = portableModuleConfigs(prepared)
                 startAuthserver()
-                startWorldserver(portableModuleConfigs)
+                startWorldserver(portableModuleConfigs, startAiBridge = false)
                 reapplyCurrentRealmConfiguration(currentRealmName, currentNetworkSettings)
                 refreshRealmNetworkSettings()
                 val importedSettings = validateImportedRealm()
@@ -406,6 +407,14 @@ class RealmForegroundService : Service() {
             if (!filename.matches(Regex("[A-Za-z0-9._-]+\\.conf"))) continue
             val mod = RealmMods.all.find { it.configFile == filename }
             if (mod == null) {
+                if (filename == "mod_ollama_chat.conf") {
+                    val chatter = RealmMods.all.single { it.id == "mod-llm-chatter" }
+                    if (chatter !in configs) {
+                        configs[chatter] = RealmModConfig.migrateLegacyOllamaChat(source.readText())
+                    }
+                    RealmRuntime.appendLog("[import] Migrating legacy Ollama Chat settings to LLM Chatter")
+                    continue
+                }
                 RealmRuntime.appendLog("[import] Skipping config for module not bundled in APK: $filename")
                 continue
             }
@@ -697,27 +706,9 @@ class RealmForegroundService : Service() {
             }
             val validatesTransmogSchema = requiresTransmogSchemaTableCheck(batch.moduleName, batch.database)
             val transmogSchemaReady = !validatesTransmogSchema ||
-                databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")
+               databaseTableExists(clientBinary, batch.database, "mod_transmog_plus_appearances")
             val skipBase = shouldSkipModuleDatabaseBootstrap(marker.isFile, transmogSchemaReady)
-            val sqlFiles = if (skipBase) {
-                batch.sqlFiles.filter { file ->
-                    if (batch.moduleName != "mod-ollama-chat" || batch.database != "acore_characters") {
-                        false
-                    } else when (file.name) {
-                        "2026_11_18_guild_relationships.sql" -> !listOf(
-                            "ollama_chat_sessions", "ollama_chat_participants",
-                            "ollama_chat_session_history", "ollama_bot_memories"
-                        ).all { databaseTableExists(clientBinary, batch.database, it) }
-                        "2026_11_18_guild_uptime.sql" -> !databaseSchemaExists(
-                            clientBinary,
-                            "SELECT EXISTS (SELECT 1 FROM information_schema.columns " +
-                                "WHERE table_schema = 'acore_characters' AND table_name = 'ollama_chat_session_history' " +
-                                "AND column_name = 'memory_offset');"
-                        )
-                        else -> false
-                    }
-                }
-            } else batch.sqlFiles
+            val sqlFiles = if (skipBase) emptyList() else batch.sqlFiles
             if (sqlFiles.isEmpty()) continue
             if (batch.moduleName == "mod-playerbots" &&
                 databaseTableExists(clientBinary, batch.database, "playerbots_account_keys")
@@ -813,6 +804,11 @@ class RealmForegroundService : Service() {
         }
         authserverProcess = null
 
+        prepareRealmForAuthserver(
+            worldserverProcess?.isAlive == true,
+            ::runAuthDatabaseQuery
+        ) { RealmRuntime.appendLog("[realm] $it") }
+
         val process = ProcessBuilder(
             nativeBinary("libauthserver.so"),
             "-c", paths.authserverConf.absolutePath
@@ -831,7 +827,10 @@ class RealmForegroundService : Service() {
         RealmRuntime.updateState { it.copy(authserver = ComponentStatus.RUNNING) }
     }
 
-    private suspend fun startWorldserver(portableModuleConfigs: Map<RealmModDefinition, String> = emptyMap()) {
+    private suspend fun startWorldserver(
+        portableModuleConfigs: Map<RealmModDefinition, String> = emptyMap(),
+        startAiBridge: Boolean = true
+    ) {
         RealmRuntime.appendLog("[realm] Worldserver phase: launching worldserver")
         RealmRuntime.updateState { it.copy(phase = RealmPhase.STARTING_WORLDSERVER) }
         RealmRuntime.updateState { it.copy(worldserver = ComponentStatus.STARTING) }
@@ -847,7 +846,17 @@ class RealmForegroundService : Service() {
         worldserverProcess = null
 
         realmModConfigStore(this).install(paths.modulesConfigDir, portableModuleConfigs)
-        startManagedOllama()
+        if (startAiBridge) {
+            startLlmChatter()
+        } else {
+            val chatterConfig = File(paths.modulesConfigDir, "mod_llm_chatter.conf")
+            if (chatterConfig.isFile) {
+                chatterConfig.writeText(RealmModConfig.replace(
+                    chatterConfig.readText(),
+                    mapOf("LLMChatter.Enable" to "0")
+                ))
+            }
+        }
         check(!intentionalStop) { "Realm startup was stopped" }
         val process = ProcessBuilder(
             "/system/bin/sh", "-c",
@@ -1092,6 +1101,12 @@ class RealmForegroundService : Service() {
     }
 
     private fun stopProcessesOnly() {
+        try {
+            llmChatterBridge?.stop()
+        } catch (error: Exception) {
+            RealmRuntime.appendLog("[llm-chatter] Could not stop bridge cleanly: ${error.message}")
+        }
+        llmChatterBridge = null
         ollamaMonitorJob?.cancel()
         ollamaMonitorJob = null
         ollama?.stop()
@@ -1107,46 +1122,56 @@ class RealmForegroundService : Service() {
         mariadbProcess = null
     }
 
-    private suspend fun startManagedOllama() {
-        val configFile = File(paths.modulesConfigDir, "mod_ollama_chat.conf")
+    private suspend fun startLlmChatter() {
+        val configFile = File(paths.modulesConfigDir, "mod_llm_chatter.conf")
         val config = configFile.readText()
-        val definition = RealmMods.all.single { it.id == "mod-ollama-chat" }
-        if (!RealmModConfig.enabled(definition, config) || !RealmOllamaConfig.managed(config)) return
+        val definition = RealmMods.all.single { it.id == "mod-llm-chatter" }
+        if (!RealmModConfig.enabled(definition, config)) return
         check(!intentionalStop) { "Realm startup was stopped" }
-        val engine = RealmOllama(
-            File(paths.root, "ollama"), File(paths.nativeLibraryDir),
-            { RealmRuntime.appendLog("[ollama] $it") },
-            { status -> RealmRuntime.updateState { it.copy(ollama = status) } },
-            RealmOllamaDriverStore(File(filesDir, "ollama-drivers"), android.os.Build.VERSION.SDK_INT)
-        )
-        ollama = engine
-        fun failed(error: Exception) {
-            engine.stop()
-            RealmRuntime.updateState { it.copy(ollama = ComponentStatus.FAILED) }
-            RealmRuntime.appendLog("[ollama] Local AI unavailable: ${error.message}. AI chat is disabled for this server session; gameplay can continue.")
-            configFile.writeText(RealmModConfig.replace(config, mapOf("OllamaChat.Enable" to "0")))
-        }
+        val runtimeRoot = File(paths.root, "llm-chatter")
+        var runtimeConfig = RealmOllamaConfig.bridgeRuntimeConfig(config, runtimeRoot)
         try {
-            engine.start(RealmOllamaConfig.downloadAllowed(config))
-            check(!intentionalStop) { "Realm startup was stopped" }
-            if (RealmOllamaConfig.guildRelationships(config)) {
-                val playerbots = File(paths.modulesConfigDir, RealmMods.playerbots.configFile)
-                playerbots.writeText(RealmOllamaConfig.quietPlayerbotsConfig(playerbots.readText()))
-                RealmRuntime.appendLog("[ollama] Native Playerbots chatter disabled for guild relationship mode.")
+            if (RealmOllamaConfig.managed(config)) {
+                val engine = RealmOllama(
+                    File(paths.root, "ollama"), File(paths.nativeLibraryDir),
+                    { RealmRuntime.appendLog("[ollama] $it") },
+                    { status -> RealmRuntime.updateState { it.copy(ollama = status) } },
+                    RealmOllamaDriverStore(File(filesDir, "ollama-drivers"), android.os.Build.VERSION.SDK_INT),
+                    model = RealmOllamaConfig.selectedModel(config)
+                )
+                ollama = engine
+                engine.start(RealmOllamaConfig.downloadAllowed(config))
+                check(!intentionalStop) { "Realm startup was stopped" }
+                runtimeConfig = RealmOllamaConfig.localRuntimeConfig(runtimeConfig)
+                ollamaMonitorJob = scope.launch { engine.monitor() }
             }
-            configFile.writeText(RealmOllamaConfig.localRuntimeConfig(config))
-            ollamaMonitorJob = scope.launch { engine.monitor() }
+
+            val playerbotsFile = File(paths.modulesConfigDir, RealmMods.playerbots.configFile)
+            if (playerbotsFile.isFile) {
+                playerbotsFile.writeText(RealmOllamaConfig.quietPlayerbotsConfig(playerbotsFile.readText()))
+            }
+            configFile.writeText(runtimeConfig)
+            val bridge = RealmLlmChatterBridge(
+                this,
+                configFile,
+                File(runtimeRoot, "tmp"),
+                { RealmRuntime.appendLog("[llm-chatter] $it") }
+            )
+            bridge.start()
+            llmChatterBridge = bridge
+            RealmRuntime.appendLog("[llm-chatter] Feature-rich chat bridge started")
         } catch (cancelled: CancellationException) {
-            engine.stop()
+            ollama?.stop()
+            ollama = null
             throw cancelled
-        } catch (error: IOException) {
-            failed(error)
-        } catch (error: IllegalStateException) {
-            failed(error)
-        } catch (error: JSONException) {
-            failed(error)
-        } catch (error: IllegalArgumentException) {
-            failed(error)
+        } catch (error: Exception) {
+            llmChatterBridge?.stop()
+            llmChatterBridge = null
+            ollama?.stop()
+            ollama = null
+            RealmRuntime.updateState { it.copy(ollama = ComponentStatus.FAILED) }
+            RealmRuntime.appendLog("[llm-chatter] AI chat could not start: ${error.message}. Gameplay will continue without AI chat.")
+            configFile.writeText(RealmModConfig.replace(runtimeConfig, mapOf("LLMChatter.Enable" to "0")))
         }
     }
 
@@ -1239,7 +1264,8 @@ class RealmForegroundService : Service() {
                 File(paths.logsDir, "Server.log") to "worldserver-file",
                 File(paths.logsDir, "Errors.log") to "errors-file",
                 File(paths.logsDir, "Playerbots.log") to "playerbots-file",
-                File(paths.root, "ollama/ollama.log") to "ollama-native"
+                File(paths.root, "ollama/ollama.log") to "ollama-native",
+                RealmOllamaConfig.bridgeLogFile(File(paths.root, "llm-chatter")) to "llm-chatter"
             )
             val positions = files.associate { (file, tag) ->
                 file to if (tag == "ollama-native") file.length() else 0L

@@ -34,8 +34,8 @@ Features
 Minimum and Maximum Bot Level Support
 ----------------------------------------
 This module supports setting minimum and maximum levels for random bots via Playerbots options:
-- **AiPlayerbot.RandomBotMinLevel:** Default is 1.
-- **AiPlayerbot.RandomBotMaxLevel:** Default is 80.
+- **Playerbots.RandomBotMinLevel:** Default is 1.
+- **Playerbots.RandomBotMaxLevel:** Default is 80.
 
 > **Warning:** If you configure the maximum bot level to a value below 55, ensure that Death Knight bots are disabled.
 
@@ -207,7 +207,7 @@ To enable detailed debug logging, update the configuration file with one of the 
 Troubleshooting
 ---------------
 > **Bots are not randomizing their levels within the range brackets.**  
-> Ensure that in your `playerbots.conf` the option `AiPlayerbot.DisableRandomLevels` is set to false. Otherwise, bots will be reset to the fixed level specified in your Playerbots configuration.
+> Ensure that in your `playerbots.conf` the option `Playerbots.DisableRandomLevels` is set to false. Otherwise, bots will be reset to the fixed level specified in your Playerbots configuration.
 
 License
 -------

@@ -6,8 +6,8 @@ CORE_DIR="${CORE_DIR:-${RUNNER_TEMP:-/tmp}/azerothcore-android}"
 BUILD_DIR="${BUILD_DIR:-${RUNNER_TEMP:-/tmp}/azerothcore-build}"
 INSTALL_DIR="${INSTALL_DIR:-${REPO_DIR}/runtime/build/server-install}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_DIR}/runtime/build/bygdok-runtime-arm64}"
-CORE_COMMIT="abc884520173084d5cd37b72b57b3822230dcb32"
-CORE_REPOSITORY="https://github.com/duall/azerothcore-android.git"
+CORE_COMMIT="32fd3472aa74961c91cb9bc942ee3e0a44b36779"
+CORE_REPOSITORY="https://github.com/mod-playerbots/azerothcore-wotlk.git"
 ANDROID_API="${ANDROID_API:-30}"
 
 : "${ANDROID_NDK_ROOT:?ANDROID_NDK_ROOT must point to Android NDK r29}"
@@ -42,7 +42,8 @@ rm -rf "$INSTALL_DIR" "$OUTPUT_DIR"
 # actions/cache only reports cache-hit=true on an exact key match; a
 # restore-keys prefix match still restores these directories but reports
 # cache-hit=false, so reuse is decided by directory validity, not the flag.
-if [ -d "$CORE_DIR/.git" ] && [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+if [ -d "$CORE_DIR/.git" ] && [ -f "$BUILD_DIR/CMakeCache.txt" ] \
+    && [ "$(git -C "$CORE_DIR" rev-parse HEAD)" = "$CORE_COMMIT" ]; then
     echo "[server] Reusing restored AzerothCore source and build directory"
 else
     echo "[server] No compatible AzerothCore build cache; performing clean checkout"

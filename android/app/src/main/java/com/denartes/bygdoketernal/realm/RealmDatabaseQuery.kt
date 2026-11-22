@@ -2,6 +2,24 @@ package com.denartes.bygdoketernal.realm
 
 import java.io.File
 
+internal fun prepareRealmForAuthserver(
+    worldserverRunning: Boolean,
+    query: (String) -> String,
+    onDiagnostic: (String) -> Unit
+) {
+    check(!worldserverRunning) { "Cannot reset realm startup flags while worldserver is running" }
+    val select = "SELECT flag FROM realmlist WHERE id = 1;"
+    val flag = query(select).trim().toIntOrNull()
+    check(flag != null && flag in 0..255) { "Realm row 1 was not found or contains an invalid flag" }
+    val offlineFlag = (flag and 1.inv()) or 2
+    if (flag == offlineFlag) return
+
+    // Worldserver uses bit 1 while loading; an interrupted load must not exclude the next authserver start.
+    query("UPDATE realmlist SET flag = (flag & ~1) | 2 WHERE id = 1;")
+    check(query(select).trim().toIntOrNull() == offlineFlag) { "Could not verify realm startup flags" }
+    onDiagnostic("Prepared realm 1 for startup: flag $flag -> $offlineFlag (offline until worldserver is ready)")
+}
+
 internal fun runRealmDatabaseQuery(
     builder: ProcessBuilder,
     temporaryDirectory: File,

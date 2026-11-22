@@ -109,19 +109,19 @@ For Guild Mate to function properly, ensure these Playerbots settings:
 
 ```conf
 # Keep bots active when no players are nearby (100 = 100% activity)
-AiPlayerbot.BotActiveAlone = 100
+Playerbots.BotActiveAlone = 100
 
 # Keep bots active when in a guild (important for Guild Mate)
-AiPlayerbot.BotActiveAloneForceWhenInGuild = 1
+Playerbots.BotActiveAloneForceWhenInGuild = 1
 
 # Allow bots to operate without a real player online (CRITICAL)
-AiPlayerbot.DisabledWithoutRealPlayer = 0
+Playerbots.DisabledWithoutRealPlayer = 0
 
 # Enable autonomous RPG behavior
-AiPlayerbot.EnableNewRpgStrategy = 1
+Playerbots.EnableNewRpgStrategy = 1
 
 # Enable autonomous questing
-AiPlayerbot.AutoDoQuests = 1
+Playerbots.AutoDoQuests = 1
 ```
 
 ## How It Works
@@ -188,13 +188,13 @@ Guild Mate: 12/12 autonomous bots online
 - Check server logs for error messages
 
 ### Bots don't quest/grind (just stand around)
-- Ensure `AiPlayerbot.BotActiveAlone = 100`
-- Ensure `AiPlayerbot.DisabledWithoutRealPlayer = 0`
-- Ensure `AiPlayerbot.EnableNewRpgStrategy = 1` or `AiPlayerbot.AutoDoQuests = 1`
+- Ensure `Playerbots.BotActiveAlone = 100`
+- Ensure `Playerbots.DisabledWithoutRealPlayer = 0`
+- Ensure `Playerbots.EnableNewRpgStrategy = 1` or `Playerbots.AutoDoQuests = 1`
 - Check server logs for "enabled with grind + new rpg strategies" message
 
 ### Bots disappear when I log out
-- Ensure `AiPlayerbot.DisabledWithoutRealPlayer = 0`
+- Ensure `Playerbots.DisabledWithoutRealPlayer = 0`
 - This is the most common misconfiguration
 
 ### Bot took over my character

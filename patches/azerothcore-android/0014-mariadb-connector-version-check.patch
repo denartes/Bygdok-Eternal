@@ -1,0 +1,28 @@
+diff --git a/src/server/database/Database/DatabaseWorkerPool.cpp b/src/server/database/Database/DatabaseWorkerPool.cpp
+--- a/src/server/database/Database/DatabaseWorkerPool.cpp
++++ b/src/server/database/Database/DatabaseWorkerPool.cpp
+@@ -49,6 +49,16 @@
+ {
+     WPFatal(mysql_thread_safe(), "Used MySQL library isn't thread-safe.");
+ 
++#ifdef MARIADB_BASE_VERSION
++    // Connector/C reports its own version, not MYSQL_VERSION_ID's server version.
++    bool isSupportClientDB = mysql_get_client_version() >= 30300u;
++    bool isSameClientDB = mysql_get_client_version() == MARIADB_PACKAGE_VERSION_ID;
++
++    WPFatal(isSupportClientDB, "AzerothCore requires MariaDB Connector/C 3.3 or newer.\nFound version: {} / {}. Compiled with: {} / {}.",
++        mysql_get_client_info(), mysql_get_client_version(), MARIADB_PACKAGE_VERSION, MARIADB_PACKAGE_VERSION_ID);
++    WPFatal(isSameClientDB, "Used MariaDB Connector/C version ({} id {}) does not match the compile-time version ({} id {}).",
++        mysql_get_client_info(), mysql_get_client_version(), MARIADB_PACKAGE_VERSION, MARIADB_PACKAGE_VERSION_ID);
++#else
+     bool isSupportClientDB = mysql_get_client_version() >= MIN_MYSQL_CLIENT_VERSION;
+     bool isSameClientDB = mysql_get_client_version() == MYSQL_VERSION_ID;
+ 
+@@ -57,6 +67,7 @@
+         mysql_get_client_info(), mysql_get_client_version(), MYSQL_VERSION_ID);
+     WPFatal(isSameClientDB, "Used MySQL library version ({} id {}) does not match the version id used to compile AzerothCore (id {}).\nSearch the wiki for ACE00046 in Common Errors (https://www.azerothcore.org/wiki/common-errors#ace00046).",
+         mysql_get_client_info(), mysql_get_client_version(), MYSQL_VERSION_ID);
++#endif
+ }
+ 
+ template <class T>

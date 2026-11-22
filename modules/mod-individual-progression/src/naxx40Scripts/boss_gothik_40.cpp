@@ -408,6 +408,7 @@ public:
                     events.Repeat(15s);
                     break;
                 case EVENT_TELEPORT:
+                {
                     me->AttackStop();
                     if (IN_LIVE_SIDE(me))
                     {
@@ -417,7 +418,15 @@ public:
                     {
                         me->CastSpell(me, SPELL_TELEPORT_LIVE, false);
                     }
-                    me->GetThreatMgr().resetAggro(NotOnSameSide(me));
+                    std::vector<Unit*> outOfSideTargets;
+                    for (ThreatReference* reference : me->GetThreatMgr().GetModifiableThreatList())
+                    {
+                        Unit* target = reference->GetVictim();
+                        if (target && NotOnSameSide(me)(target))
+                            outOfSideTargets.push_back(target);
+                    }
+                    for (Unit* target : outOfSideTargets)
+                        me->GetThreatMgr().ClearThreat(target);
                     if (Unit* pTarget = SelectTarget(SelectTargetMethod::MaxDistance, 0))
                     {
                         me->GetThreatMgr().AddThreat(pTarget, 100.0f);
@@ -425,6 +434,7 @@ public:
                     }
                     events.Repeat(20s);
                     break;
+                }
                 case EVENT_CHECK_HEALTH:
                     if (me->HealthBelowPct(30))
                     {
@@ -440,7 +450,7 @@ public:
                     if (gothikWaves[waveCount][0])
                     {
                         SummonHelpers(gothikWaves[waveCount][0]);
-                        events.RepeatEvent(gothikWaves[waveCount][1]);
+                        events.Repeat(Milliseconds(gothikWaves[waveCount][1]));
                     }
                     else
                     {

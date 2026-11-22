@@ -126,8 +126,8 @@ static void LoadBotLevelBracketsConfig()
     }
 
     // Load the bot level restrictions.
-    g_RandomBotMinLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>("AiPlayerbot.RandomBotMinLevel", 1));
-    g_RandomBotMaxLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>("AiPlayerbot.RandomBotMaxLevel", 80));
+    g_RandomBotMinLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>("Playerbots.RandomBotMinLevel", 1));
+    g_RandomBotMaxLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>("Playerbots.RandomBotMaxLevel", 80));
 
     // Load the custom number of brackets.
     g_NumRanges = static_cast<uint8>(sConfigMgr->GetOption<uint32>("BotLevelBrackets.NumRanges", 9));
@@ -191,7 +191,7 @@ static bool IsPlayerBot(Player* player)
     {
         return false;
     }
-    PlayerbotAI* botAI = sPlayerbotsMgr->GetPlayerbotAI(player);
+    PlayerbotAI* botAI = sPlayerbotsMgr.GetPlayerbotAI(player);
     return botAI && botAI->IsBotAI();
 }
 
@@ -211,7 +211,7 @@ static bool IsPlayerRandomBot(Player* player)
     {
         return false;
     }
-    return sRandomPlayerbotMgr->IsRandomBot(player);
+    return sRandomPlayerbotMgr.IsRandomBot(player);
 }
 
 
@@ -446,7 +446,7 @@ static uint8 GetRandomLevelInRange(const LevelRangeConfig& range)
  */
 static void AdjustBotToRange(Player* bot, int targetRangeIndex, const LevelRangeConfig* factionRanges)
 {
-    if (!bot || !bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->isLogingOut() || bot->IsDuringRemoveFromWorld())
+    if (!bot || !bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->IsLoggingOut() || bot->IsDuringRemoveFromWorld())
     {
         return;
     }
@@ -496,7 +496,7 @@ static void AdjustBotToRange(Player* bot, int targetRangeIndex, const LevelRange
 
     if (g_BotDistFullDebugMode)
     {
-        PlayerbotAI* botAI = sPlayerbotsMgr->GetPlayerbotAI(bot);
+        PlayerbotAI* botAI = sPlayerbotsMgr.GetPlayerbotAI(bot);
         std::string playerClassName = botAI ? botAI->GetChatHelper()->FormatClass(bot->getClass()) : "Unknown";
         std::string playerFaction = IsAlliancePlayerBot(bot) ? "Alliance" : "Horde";
         LOG_INFO("server.loading",
@@ -521,7 +521,7 @@ static void AdjustBotToRange(Player* bot, int targetRangeIndex, const LevelRange
  */
 static bool BotInGuildWithRealPlayer(Player* bot)
 {
-    if (!bot || !bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->isLogingOut() || bot->IsDuringRemoveFromWorld())
+    if (!bot || !bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->IsLoggingOut() || bot->IsDuringRemoveFromWorld())
     {
         return false;
     }
@@ -548,7 +548,7 @@ static bool BotInGuildWithRealPlayer(Player* bot)
  */
 static bool BotInFriendList(Player* bot)
 {
-    if (!bot || !bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->isLogingOut() || bot->IsDuringRemoveFromWorld())
+    if (!bot || !bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->IsLoggingOut() || bot->IsDuringRemoveFromWorld())
     {
         return false;
     }
@@ -685,7 +685,7 @@ static void ClampAndBalanceBrackets()
  */
 static bool IsBotSafeForLevelReset(Player* bot)
 {
-    if (!bot || !bot->GetSession() || bot->GetSession()->isLogingOut() || bot->IsDuringRemoveFromWorld())
+    if (!bot || !bot->GetSession() || bot->GetSession()->IsLoggingOut() || bot->IsDuringRemoveFromWorld())
     {
         if (g_BotDistFullDebugMode)
         {
@@ -822,7 +822,7 @@ static void ProcessPendingLevelResets()
                 continue;
             }
 
-            if (!bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->isLogingOut() || bot->IsDuringRemoveFromWorld())
+            if (!bot->IsInWorld() || !bot->GetSession() || bot->GetSession()->IsLoggingOut() || bot->IsDuringRemoveFromWorld())
             {
                 it = g_PendingLevelResets.erase(it);
                 continue;

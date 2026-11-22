@@ -18,7 +18,7 @@ KEPT_MODULES = {
     "mod-account-achievements", "mod-aoe-loot", "mod-ah-bot-plus", "mod-duel-reset",
     "mod-emblem-transfer", "mod-guildhouse", "mod-instance-reset", "mod-npc-enchanter",
     "mod-reagent-bank", "mod-playerbots", "mod-player-bot-level-brackets",
-    "mod-individual-progression", "mod-guild-mate", "mod-transmog-plus", "mod-ollama-chat",
+    "mod-individual-progression", "mod-guild-mate", "mod-transmog-plus", "mod-llm-chatter",
 }
 
 

@@ -8,7 +8,7 @@
     {
       "name": "mod-aoe-loot",
       "upstream": "https://github.com/azerothcore/mod-aoe-loot",
-      "commit": "1efc29f0934fc55964e97aba85cc741a67f1aade"
+      "commit": "957f9a1a686141d96c8b55e9431bfe2a0fb26e46"
     },
     {
       "name": "mod-ah-bot-plus",
@@ -24,32 +24,32 @@
     {
       "name": "mod-emblem-transfer",
       "upstream": "https://github.com/azerothcore/mod-emblem-transfer",
-      "commit": "5d9d0d9ff8c8b80fb33f6615f046b979d5efccb4"
+      "commit": "feb2007a50c77680bd6d15aaaf45e8a185dad7cf"
     },
     {
       "name": "mod-guildhouse",
       "upstream": "https://github.com/azerothcore/mod-guildhouse",
-      "commit": "23b86dcc78471c50c60b3fc27e07e4cda8a3e200"
+      "commit": "0b3cc14e947a859f8a7751a10676107d6316275b"
     },
     {
       "name": "mod-instance-reset",
       "upstream": "https://github.com/azerothcore/mod-instance-reset",
-      "commit": "42ddc011dd6836ad662774472b0b214d32c3ea31"
+      "commit": "1e2c20770f40f5382348b7649291371f47c86812"
     },
     {
       "name": "mod-npc-enchanter",
       "upstream": "https://github.com/azerothcore/mod-npc-enchanter",
-      "commit": "0c34e45a534d6335732f778eb15eb68bba7f8055"
+      "commit": "af32add66eafc0e0eb8775999e76ceed75f18b74"
     },
     {
       "name": "mod-reagent-bank",
       "upstream": "https://github.com/ZhengPeiRu21/mod-reagent-bank",
-      "commit": "eceb91d636f56289f8720eea6d3c7e24db07bd43"
+      "commit": "62c265338ceba10fb754394413e6c4c61cedf9de"
     },
     {
       "name": "mod-playerbots",
-      "upstream": "https://github.com/liyunfan1223/mod-playerbots",
-      "commit": "df3c44419de4ec447b1d73de180d3753f3bd8f4c"
+      "upstream": "https://github.com/mod-playerbots/mod-playerbots",
+      "commit": "ecc4a537a3b43056e412fae63fb4a4271849b472"
     },
     {
       "name": "mod-player-bot-level-brackets",
@@ -72,9 +72,9 @@
       "origin": "Locally modified baseline; maintained in this repository"
     },
     {
-      "name": "mod-ollama-chat",
-      "upstream": "https://github.com/DustinHendrickson/mod-ollama-chat",
-      "origin": "Existing local snapshot; original upstream commit not recorded"
+      "name": "mod-llm-chatter",
+      "upstream": "https://github.com/Hokken/mod-llm-chatter",
+      "commit": "fab826567008ad03a055e349b253262225fd0dc0"
     }
   ]
 }

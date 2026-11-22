@@ -75,7 +75,7 @@ void GuildMateMgr::Initialize()
     }
 
     // Check if Playerbots is enabled
-    if (!sPlayerbotAIConfig->enabled && !sPlayerbotAIConfig->randomBotAutologin)
+    if (!sPlayerbotAIConfig.Enabled && !sPlayerbotAIConfig.RandomBotAutologin)
     {
         LOG_ERROR("module.guildmate", "Guild Mate: Playerbots module is not enabled. Guild Mate requires Playerbots.");
         enabled = false;
@@ -184,7 +184,7 @@ void GuildMateMgr::LoadEligibleCharacters()
                     uint32 accountId = fields[1].Get<uint32>();
 
                     // Skip random bot accounts if configured
-                    if (excludeRandomBotAccounts && sPlayerbotAIConfig->IsInRandomAccountList(accountId))
+                    if (excludeRandomBotAccounts && sPlayerbotAIConfig.IsInRandomAccountList(accountId))
                     {
                         continue;
                     }
@@ -332,7 +332,7 @@ void GuildMateMgr::OnBotLoginInternal(Player* const bot)
     // Set randomize event to prevent ProcessBot from re-randomizing this bot's gear
     // Guild Mate bots are player alts with real gear, not randomly generated bots
     uint32 botId = bot->GetGUID().GetCounter();
-    sRandomPlayerbotMgr->SetValue(botId, "randomize", 1);
+    sRandomPlayerbotMgr.SetValue(botId, "randomize", 1);
 
     // Get the PlayerbotAI for this bot (created by PlayerbotHolder::OnBotLogin())
     PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
@@ -345,12 +345,12 @@ void GuildMateMgr::OnBotLoginInternal(Player* const bot)
         ai->ChangeStrategy("+grind", BOT_STATE_NON_COMBAT);
 
         // Add RPG strategy based on configuration
-        if (sPlayerbotAIConfig->enableNewRpgStrategy)
+        if (sPlayerbotAIConfig.EnableNewRpgStrategy)
         {
             ai->ChangeStrategy("+new rpg", BOT_STATE_NON_COMBAT);
             LOG_DEBUG("module.guildmate", "Guild Mate: {} enabled with grind + new rpg strategies", bot->GetName());
         }
-        else if (sPlayerbotAIConfig->autoDoQuests)
+        else if (sPlayerbotAIConfig.AutoDoQuests)
         {
             ai->ChangeStrategy("+rpg", BOT_STATE_NON_COMBAT);
             LOG_DEBUG("module.guildmate", "Guild Mate: {} enabled with grind + rpg strategies", bot->GetName());
@@ -376,7 +376,7 @@ void GuildMateMgr::OnBotLoginInternal(Player* const bot)
     // This ensures the RPG system has valid grind/camp locations nearby
     if (teleportOnLogin)
     {
-        sRandomPlayerbotMgr->RandomTeleportForLevel(bot);
+        sRandomPlayerbotMgr.RandomTeleportForLevel(bot);
         LOG_INFO("module.guildmate", "Guild Mate: {} teleported to level-appropriate zone", bot->GetName());
     }
 }
@@ -406,7 +406,7 @@ bool GuildMateMgr::ShouldRelocateForLevel(Player* bot)
         return false;
 
     std::string zoneBracket = sConfigMgr->GetOption<std::string>(
-        "AiPlayerbot.ZoneBracket." + std::to_string(bot->GetZoneId()), "", false);
+        "Playerbots.ZoneBracket." + std::to_string(bot->GetZoneId()), "", false);
     if (zoneBracket.empty())
         return false;
 
@@ -437,38 +437,29 @@ bool GuildMateMgr::TryRelocateGuildMateForLevel(Player* bot)
         return false;
 
     uint8 level = bot->GetLevel();
-    std::vector<WorldLocation>* locs = nullptr;
-    std::vector<WorldLocation>* fallbackLocs = nullptr;
+    std::vector<WorldLocation> locs = sTravelMgr.GetTeleportLocations(bot, level);
+    std::vector<WorldLocation> fallbackLocs;
 
-    if (sPlayerbotAIConfig->enableNewRpgStrategy)
-    {
-        locs = IsAlliance(bot->getRace())
-            ? &sRandomPlayerbotMgr->allianceStarterPerLevelCache[level]
-            : &sRandomPlayerbotMgr->hordeStarterPerLevelCache[level];
-        fallbackLocs = &sRandomPlayerbotMgr->locsPerLevelCache[level];
-    }
-    else
-    {
-        locs = &sRandomPlayerbotMgr->locsPerLevelCache[level];
-    }
+    if (sPlayerbotAIConfig.EnableNewRpgStrategy)
+        fallbackLocs = sTravelMgr.GetLocsPerLevelCache(level);
 
-    if (level >= 10 && urand(0, 100) < sPlayerbotAIConfig->probTeleToBankers * 100)
+    if (level >= 10 && urand(0, 100) < sPlayerbotAIConfig.ProbTeleToBankers * 100)
     {
-        std::vector<WorldLocation>* bankerLocs = &sRandomPlayerbotMgr->bankerLocsPerLevelCache[level];
-        if (!bankerLocs->empty())
-            locs = bankerLocs;
+        std::vector<WorldLocation> bankerLocs = sTravelMgr.GetCityLocations(bot);
+        if (!bankerLocs.empty())
+            locs = std::move(bankerLocs);
     }
 
     for (uint8 pass = 0; pass < 2; ++pass)
     {
-        std::vector<WorldLocation>* candidates = pass == 0 ? locs : fallbackLocs;
-        if (!candidates || candidates->empty())
+        std::vector<WorldLocation> const& candidates = pass == 0 ? locs : fallbackLocs;
+        if (candidates.empty())
             continue;
 
-        uint32 start = urand(0, candidates->size() - 1);
-        for (uint32 offset = 0; offset < candidates->size(); ++offset)
+        uint32 start = urand(0, candidates.size() - 1);
+        for (uint32 offset = 0; offset < candidates.size(); ++offset)
         {
-            WorldLocation loc = (*candidates)[(start + offset) % candidates->size()];
+            WorldLocation loc = candidates[(start + offset) % candidates.size()];
             Map* map = sMapMgr->FindMap(loc.GetMapId(), 0);
             if (!map)
                 continue;
@@ -500,9 +491,6 @@ bool GuildMateMgr::TryRelocateGuildMateForLevel(Player* bot)
                 continue;
 
             z = ground + 0.05f;
-            WorldLocation checkedLoc(loc.GetMapId(), x, y, z, orientation);
-            if (!ai->CheckLocationDistanceByLevel(bot, checkedLoc, true))
-                continue;
 
             bot->GetMotionMaster()->Clear();
             ai->Reset(true);
@@ -535,7 +523,7 @@ void GuildMateMgr::EnsureLevelAppropriateZone(Player* bot)
     uint8 level = bot->GetLevel();
     if (TryRelocateGuildMateForLevel(bot))
     {
-        sRandomPlayerbotMgr->ScheduleTeleport(lowGuid);
+        sRandomPlayerbotMgr.ScheduleTeleport(lowGuid);
         return;
     }
 
@@ -599,9 +587,9 @@ void GuildMateMgr::RestoreAutonomy(Player* bot)
 
     ai->ChangeStrategy("+grind", BOT_STATE_NON_COMBAT);
 
-    if (sPlayerbotAIConfig->enableNewRpgStrategy)
+    if (sPlayerbotAIConfig.EnableNewRpgStrategy)
         ai->ChangeStrategy("+new rpg", BOT_STATE_NON_COMBAT);
-    else if (sPlayerbotAIConfig->autoDoQuests)
+    else if (sPlayerbotAIConfig.AutoDoQuests)
         ai->ChangeStrategy("+rpg", BOT_STATE_NON_COMBAT);
     else
         ai->ChangeStrategy("+move random", BOT_STATE_NON_COMBAT);
@@ -635,9 +623,9 @@ void GuildMateMgr::EnsureAutonomousStrategies(Player* bot)
         
         ai->ChangeStrategy("+grind", BOT_STATE_NON_COMBAT);
         
-        if (sPlayerbotAIConfig->enableNewRpgStrategy)
+        if (sPlayerbotAIConfig.EnableNewRpgStrategy)
             ai->ChangeStrategy("+new rpg", BOT_STATE_NON_COMBAT);
-        else if (sPlayerbotAIConfig->autoDoQuests)
+        else if (sPlayerbotAIConfig.AutoDoQuests)
             ai->ChangeStrategy("+rpg", BOT_STATE_NON_COMBAT);
         else
             ai->ChangeStrategy("+move random", BOT_STATE_NON_COMBAT);
@@ -691,7 +679,7 @@ void GuildMateMgr::ReconcileAutonomy()
             // Let RandomPlayerbotMgr handle maintenance (revive, teleport, refresh)
             if (!bot->GetGroup() && periodicTeleport)
             {
-                sRandomPlayerbotMgr->ProcessBot(bot);
+                sRandomPlayerbotMgr.ProcessBot(bot);
             }
 
             EnsureLevelAppropriateZone(bot);

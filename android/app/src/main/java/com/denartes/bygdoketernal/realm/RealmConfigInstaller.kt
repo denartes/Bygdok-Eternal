@@ -33,7 +33,9 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
         }
         File(paths.etcDir, "my.cnf").writeText("[mysqld]\nversion=8.0.36\n")
         realmModConfigStore(context).install(paths.modulesConfigDir)
-        copyAssetTreeIfPresent("sql", paths.sqlDir)
+        replaceBundledRealmSql(paths.sqlDir) { destination ->
+            copyAssetTreeIfPresent("sql", destination)
+        }
         copyAssetTreeIfPresent("mariadb-share", paths.mariadbBaseDir)
         paths.mariadbLibDir.deleteRecursively()
         paths.mariadbLibDir.mkdirs()
@@ -75,4 +77,15 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
             copyAssetTreeIfPresent("$assetPath/$entry", File(destinationDir, entry))
         }
     }
+}
+
+internal fun replaceBundledRealmSql(destination: File, copyAssets: (File) -> Unit) {
+    // SQL assets are disposable; merging retains migrations moved into archive by core updates.
+    check(!destination.exists() || destination.deleteRecursively()) {
+        "Could not remove outdated bundled SQL at ${destination.absolutePath}"
+    }
+    check(destination.mkdirs()) {
+        "Could not create bundled SQL directory at ${destination.absolutePath}"
+    }
+    copyAssets(destination)
 }

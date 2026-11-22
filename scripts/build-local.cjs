@@ -18,6 +18,7 @@ function build({ checkOnly = false, platform = process.platform, execute = run }
   }
 
   execute("python", ["--version"]);
+  execute("py", ["-3.10", "--version"]);
   execute("java", ["-version"]);
   // --cd accepts the Windows workspace path, including spaces, without shell interpolation.
   const nativeArgs = ["--cd", root, "--exec", "bash", "scripts/build-local-native.sh"];

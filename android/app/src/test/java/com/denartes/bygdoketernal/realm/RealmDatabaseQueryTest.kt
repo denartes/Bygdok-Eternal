@@ -7,6 +7,64 @@ import java.nio.file.Files
 
 class RealmDatabaseQueryTest {
     @Test
+    fun `realm startup clears stale mismatch and preserves other flags while offline`() {
+        for (original in 0..255) {
+            var flag = original
+            val queries = mutableListOf<String>()
+            val diagnostics = mutableListOf<String>()
+            prepareRealmForAuthserver(false, { sql ->
+                queries.add(sql)
+                when (sql) {
+                    "SELECT flag FROM realmlist WHERE id = 1;" -> "$flag\n"
+                    "UPDATE realmlist SET flag = (flag & ~1) | 2 WHERE id = 1;" -> {
+                        flag = (flag and 1.inv()) or 2
+                        ""
+                    }
+                    else -> error("Unexpected query: $sql")
+                }
+            }, diagnostics::add)
+            assertEquals((original and 1.inv()) or 2, flag)
+            assertEquals(0, flag and 1)
+            assertEquals(2, flag and 2)
+            assertEquals(original and 3.inv(), flag and 3.inv())
+            assertEquals(if (flag == original) 1 else 3, queries.size)
+            assertEquals(if (flag == original) 0 else 1, diagnostics.size)
+        }
+    }
+
+    @Test
+    fun `realm startup rejects missing invalid or unverified flags`() {
+        for (row in listOf("", "invalid", "-1", "256", "3\n2")) {
+            val queries = mutableListOf<String>()
+            assertThrows(IllegalStateException::class.java) {
+                prepareRealmForAuthserver(false, { sql -> queries.add(sql); row }) {}
+            }
+            assertEquals(1, queries.size)
+        }
+        val diagnostics = mutableListOf<String>()
+        assertThrows(IllegalStateException::class.java) {
+            prepareRealmForAuthserver(false, { "3" }, diagnostics::add)
+        }
+        assertTrue(diagnostics.isEmpty())
+    }
+
+    @Test
+    fun `realm startup cannot change flags while worldserver is alive`() {
+        assertThrows(IllegalStateException::class.java) {
+            prepareRealmForAuthserver(true, { error("Database must not be queried") }) {}
+        }
+    }
+
+    @Test
+    fun `realm startup propagates database failures without reporting success`() {
+        val diagnostics = mutableListOf<String>()
+        assertThrows(java.io.IOException::class.java) {
+            prepareRealmForAuthserver(false, { throw java.io.IOException("query failed") }, diagnostics::add)
+        }
+        assertTrue(diagnostics.isEmpty())
+    }
+
+    @Test
     fun `successful queries keep warnings separate from result rows`() {
         withClient(0) { builder, directory ->
             val diagnostics = mutableListOf<String>()

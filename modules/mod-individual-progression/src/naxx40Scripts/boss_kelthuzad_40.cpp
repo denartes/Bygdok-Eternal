@@ -403,14 +403,14 @@ public:
                 case EVENT_DETONATE_MANA:
                     {
                         std::vector<Unit*> unitList;
-                        ThreatContainer::StorageType const& threatList = me->GetThreatMgr().GetThreatList();
-                        for (auto itr : threatList)
+                        for (ThreatReference const* reference : me->GetThreatMgr().GetUnsortedThreatList())
                         {
-                            if (itr->getTarget()->IsPlayer()
-                                    && itr->getTarget()->getPowerType() == POWER_MANA
-                                    && itr->getTarget()->GetPower(POWER_MANA))
+                            Unit* target = reference->GetVictim();
+                            if (target && target->IsPlayer()
+                                    && target->getPowerType() == POWER_MANA
+                                    && target->GetPower(POWER_MANA))
                                     {
-                                        unitList.push_back(itr->getTarget());
+                                        unitList.push_back(target);
                                     }
                         }
                         if (!unitList.empty())
@@ -451,7 +451,7 @@ public:
                         cr->AI()->Talk(SAY_ANSWER_REQUEST);
 
                     for (uint8 i = 0 ; i < RAID_MODE(2, 4, 4, 4); ++i)
-                        events.ScheduleEvent(EVENT_SUMMON_GUARDIAN_OF_ICECROWN, 10000 + (i * 5000));
+                        events.ScheduleEvent(EVENT_SUMMON_GUARDIAN_OF_ICECROWN, Milliseconds(10000 + (i * 5000)));
 
                     break;
                 }
@@ -507,7 +507,7 @@ public:
             {
                 if (!me->IsInCombat())
                 {
-                    me->DespawnOrUnsummon(500);
+                    me->DespawnOrUnsummon(500ms);
                 }
             }
             if (param == ACTION_GUARDIANS_OFF)
@@ -687,4 +687,3 @@ void AddSC_boss_kelthuzad_40()
     // RegisterSpellScript(spell_kelthuzad_frost_blast);
     // RegisterSpellScript(spell_kelthuzad_detonate_mana_aura);
 }
-

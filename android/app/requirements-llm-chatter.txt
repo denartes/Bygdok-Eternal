@@ -1,0 +1,4 @@
+mysql-connector-python==9.1.0
+# jsonschema 4.17 avoids rpds-py, which has no compatible Chaquopy wheel.
+jsonschema==4.17.3
+httpx==0.28.1

@@ -91,8 +91,8 @@ class RealmBackupImporterTest {
         for (database in RealmBackupImporter.requiredDatabases) {
             put("bygdok-export/databases/$database.sql", dump(database))
         }
-        put("bygdok-export/config/modules/playerbots.conf", "AiPlayerbot.Enabled = 1\n")
-        put("bygdok-export/module-data/mod-ollama-chat/rag.json", "[]\n")
+        put("bygdok-export/config/modules/playerbots.conf", "Playerbots.Enabled = 1\n")
+        put("bygdok-export/module-data/mod-llm-chatter/rag.json", "[]\n")
     }
 
     private fun dump(database: String): String = """
