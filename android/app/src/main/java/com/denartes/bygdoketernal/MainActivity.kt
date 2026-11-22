@@ -54,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -90,6 +91,15 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) startRealmImport(uri)
         }
+    private val exportArchiveLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+            if (uri != null) {
+                startForegroundService(Intent(this, RealmForegroundService::class.java)
+                    .setAction(RealmForegroundService.ACTION_EXPORT_REALM)
+                    .setData(uri)
+                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,74 +128,82 @@ class MainActivity : ComponentActivity() {
                     Box(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
                         val state by RealmRuntime.state.collectAsState()
                         val setupComplete by RealmRuntime.setupComplete.collectAsState()
-                        if (setupComplete) DashboardScreen(
-                            onStart = {
-                                RealmRuntime.beginStart()
-                                startForegroundService(
-                                    Intent(this@MainActivity, RealmForegroundService::class.java)
-                                        .setAction(RealmForegroundService.ACTION_START_REALM)
-                                )
-                            },
-                            onStop = {
-                                startService(
-                                    Intent(this@MainActivity, RealmForegroundService::class.java)
-                                        .setAction(RealmForegroundService.ACTION_STOP)
-                                )
-                            },
-                            onConsoleCommand = { command ->
-                                sendRealmAction(RealmForegroundService.ACTION_CONSOLE_COMMAND) {
-                                    putExtra(RealmForegroundService.EXTRA_COMMAND, command)
+                        val restoreRevision by RealmRuntime.restoreRevision.collectAsState()
+                        key(restoreRevision) {
+                            if (setupComplete) DashboardScreen(
+                                onStart = {
+                                    RealmRuntime.beginStart()
+                                    startForegroundService(
+                                        Intent(this@MainActivity, RealmForegroundService::class.java)
+                                            .setAction(RealmForegroundService.ACTION_START_REALM)
+                                    )
+                                },
+                                onStop = {
+                                    startService(
+                                        Intent(this@MainActivity, RealmForegroundService::class.java)
+                                            .setAction(RealmForegroundService.ACTION_STOP)
+                                    )
+                                },
+                                onConsoleCommand = { command ->
+                                    sendRealmAction(RealmForegroundService.ACTION_CONSOLE_COMMAND) {
+                                        putExtra(RealmForegroundService.EXTRA_COMMAND, command)
+                                    }
+                                },
+                                onRefreshAccounts = {
+                                    sendRealmAction(RealmForegroundService.ACTION_REFRESH_ACCOUNTS)
+                                },
+                                onCreateAccount = { username, password, makeGm ->
+                                    sendRealmAction(RealmForegroundService.ACTION_CREATE_ACCOUNT) {
+                                        putExtra(RealmForegroundService.EXTRA_USERNAME, username)
+                                        putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
+                                        putExtra(RealmForegroundService.EXTRA_GM, makeGm)
+                                    }
+                                },
+                                onSetAccountGmLevel = { username, gmLevel ->
+                                    sendRealmAction(RealmForegroundService.ACTION_SET_ACCOUNT_GM_LEVEL) {
+                                        putExtra(RealmForegroundService.EXTRA_USERNAME, username)
+                                        putExtra(RealmForegroundService.EXTRA_GM_LEVEL, gmLevel)
+                                    }
+                                },
+                                onLoadNetworkSettings = {
+                                    sendRealmAction(RealmForegroundService.ACTION_LOAD_NETWORK_SETTINGS)
+                                },
+                                onSaveNetworkSettings = { realmAddress, localAddress ->
+                                    if (!RealmRuntime.state.value.isBusy) {
+                                        networkSettingsStore.save(
+                                            RealmNetworkSettings(realmAddress, localAddress)
+                                        )
+                                        RealmRuntime.setNetworkSettings(RealmNetworkSettings(realmAddress, localAddress))
+                                    }
+                                },
+                                onApplyNetworkSettings = { realmAddress, localAddress ->
+                                    sendRealmAction(RealmForegroundService.ACTION_SAVE_NETWORK_SETTINGS) {
+                                        putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
+                                        putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
+                                    }
+                                },
+                                onImportRealm = ::chooseRealmImport,
+                                onExportRealm = {
+                                    exportArchiveLauncher.launch("bygdok-realm-${java.time.LocalDate.now()}.zip")
                                 }
-                            },
-                            onRefreshAccounts = {
-                                sendRealmAction(RealmForegroundService.ACTION_REFRESH_ACCOUNTS)
-                            },
-                            onCreateAccount = { username, password, makeGm ->
-                                sendRealmAction(RealmForegroundService.ACTION_CREATE_ACCOUNT) {
-                                    putExtra(RealmForegroundService.EXTRA_USERNAME, username)
-                                    putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
-                                    putExtra(RealmForegroundService.EXTRA_GM, makeGm)
-                                }
-                            },
-                            onSetAccountGmLevel = { username, gmLevel ->
-                                sendRealmAction(RealmForegroundService.ACTION_SET_ACCOUNT_GM_LEVEL) {
-                                    putExtra(RealmForegroundService.EXTRA_USERNAME, username)
-                                    putExtra(RealmForegroundService.EXTRA_GM_LEVEL, gmLevel)
-                                }
-                            },
-                            onLoadNetworkSettings = {
-                                sendRealmAction(RealmForegroundService.ACTION_LOAD_NETWORK_SETTINGS)
-                            },
-                            onSaveNetworkSettings = { realmAddress, localAddress ->
-                                networkSettingsStore.save(
-                                    RealmNetworkSettings(realmAddress, localAddress)
-                                )
-                                RealmRuntime.setNetworkSettings(RealmNetworkSettings(realmAddress, localAddress))
-                            },
-                            onApplyNetworkSettings = { realmAddress, localAddress ->
-                                sendRealmAction(RealmForegroundService.ACTION_SAVE_NETWORK_SETTINGS) {
-                                    putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
-                                    putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
-                                }
-                            },
-                            onImportRealm = ::chooseRealmImport
-                        ) else InitialSetupScreen(
-                            state = state,
-                            onStartDatabase = {
-                                RealmRuntime.beginDatabaseOnlyStart()
-                                sendRealmAction(RealmForegroundService.ACTION_START_DATABASE_ONLY)
-                            },
-                            onComplete = { realmName, realmAddress, localAddress, username, password ->
-                                sendRealmAction(RealmForegroundService.ACTION_COMPLETE_INITIAL_SETUP) {
-                                    putExtra(RealmForegroundService.EXTRA_REALM_NAME, realmName)
-                                    putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
-                                    putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
-                                    putExtra(RealmForegroundService.EXTRA_USERNAME, username)
-                                    putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
-                                }
-                            },
-                            onImportRealm = ::chooseRealmImport
-                        )
+                            ) else InitialSetupScreen(
+                                state = state,
+                                onStartDatabase = {
+                                    RealmRuntime.beginDatabaseOnlyStart()
+                                    sendRealmAction(RealmForegroundService.ACTION_START_DATABASE_ONLY)
+                                },
+                                onComplete = { realmName, realmAddress, localAddress, username, password ->
+                                    sendRealmAction(RealmForegroundService.ACTION_COMPLETE_INITIAL_SETUP) {
+                                        putExtra(RealmForegroundService.EXTRA_REALM_NAME, realmName)
+                                        putExtra(RealmForegroundService.EXTRA_REALM_ADDRESS, realmAddress)
+                                        putExtra(RealmForegroundService.EXTRA_LOCAL_ADDRESS, localAddress)
+                                        putExtra(RealmForegroundService.EXTRA_USERNAME, username)
+                                        putExtra(RealmForegroundService.EXTRA_PASSWORD, password)
+                                    }
+                                },
+                                onImportRealm = ::chooseRealmImport
+                            )
+                        }
                     }
                 }
             }
@@ -209,6 +227,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun chooseRealmImport() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Restore realm backup?")
+            .setMessage("A full backup replaces the entire stopped realm, saved settings, AI models and imported drivers. " +
+                "Export your current realm first. Only restore a backup you trust.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Choose backup") { _, _ -> launchRealmImportPicker() }
+            .show()
+    }
+
+    private fun launchRealmImportPicker() {
         importArchiveLauncher.launch(
             arrayOf(
                 "application/zip",
@@ -244,7 +272,7 @@ private fun InitialSetupScreen(
     var localAddress by rememberSaveable { mutableStateOf(networkSettings.localAddress) }
     var username by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
-    val lastSetupMessage = logLines.lastOrNull { it.startsWith("[setup]") }
+    val lastSetupMessage = logLines.lastOrNull { it.startsWith("[setup]") || it.startsWith("[import]") }
 
     Column(
         modifier = Modifier
@@ -279,6 +307,7 @@ private fun InitialSetupScreen(
                 enabled = !state.isBusy,
                 modifier = Modifier.fillMaxWidth()
             ) { Text("IMPORT EXISTING REALM") }
+            Text("For a fresh-install restore, import your full backup before starting MariaDB.")
         } else {
             OutlinedTextField(
                 value = realmName,
@@ -359,7 +388,8 @@ private fun DashboardScreen(
     onLoadNetworkSettings: () -> Unit,
     onSaveNetworkSettings: (String, String) -> Unit,
     onApplyNetworkSettings: (String, String) -> Unit,
-    onImportRealm: () -> Unit
+    onImportRealm: () -> Unit,
+    onExportRealm: () -> Unit
 ) {
     val state by RealmRuntime.state.collectAsState()
     val logLines by RealmRuntime.logLines.collectAsState()
@@ -443,8 +473,9 @@ private fun DashboardScreen(
                 )
                 4 -> ImportRealmPanel(
                     logLines = logLines,
-                    enabled = !state.isBusy && !botAccountState.busy,
+                    enabled = state.canBackup && !botAccountState.busy && !unsavedMods,
                     onImport = onImportRealm,
+                    onExport = onExportRealm,
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)
                 )
                 5 -> tabState.SaveableStateProvider("mods") {
@@ -472,7 +503,7 @@ private fun DashboardScreen(
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf("⌂" to "Home", "▤" to "Accounts", "◎" to "Network", ">_" to "Console", "⇧" to "Import", "+" to "Mods")
+            listOf("⌂" to "Home", "▤" to "Accounts", "◎" to "Network", ">_" to "Console", "⇧" to "Backup", "+" to "Mods")
                 .forEachIndexed { index, (icon, label) ->
                     val selected = selectedTab == index
                     TextButton(
@@ -862,6 +893,7 @@ private fun phaseLabel(phase: RealmPhase): String = when (phase) {
     RealmPhase.DATABASE_READY -> "MariaDB ready"
     RealmPhase.CONFIGURING_INITIAL_SETUP -> "Saving setup..."
     RealmPhase.IMPORTING_REALM -> "Importing realm..."
+    RealmPhase.EXPORTING_REALM -> "Exporting realm..."
     RealmPhase.STARTING_AUTHSERVER -> "Starting authserver..."
     RealmPhase.PREPARING_CLIENT_DATA -> "Preparing client data..."
     RealmPhase.STARTING_WORLDSERVER -> "Starting worldserver..."
@@ -874,12 +906,22 @@ private fun ImportRealmPanel(
     logLines: List<String>,
     enabled: Boolean,
     onImport: () -> Unit,
+    onExport: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val importMessage = logLines.lastOrNull { it.startsWith("[import]") }
-    Column(modifier = modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Import Realm", style = MaterialTheme.typography.titleLarge)
-        Text("Restore a Bygdok logical backup. The current realm is retained until validation succeeds.")
+    val importMessage = logLines.lastOrNull { it.startsWith("[import]") || it.startsWith("[backup]") }
+    Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Realm Backup", style = MaterialTheme.typography.titleLarge)
+        Text("Stop all components and save mod edits first. Export includes every realm database, client data, " +
+            "AI models and memories, imported GPU drivers, configurations and saved app settings.")
+        Text("Keep the ZIP outside app storage and keep a copy of this APK. Backups contain credentials and " +
+            "provider keys and are not encrypted. Large realms need several GB of space.")
+        Button(onClick = onExport, enabled = enabled, modifier = Modifier.fillMaxWidth().height(54.dp)) {
+            Text("EXPORT FULL REALM")
+        }
+        Text("Restore replaces the stopped realm after checksum validation. The same MariaDB runtime is required. " +
+            "Legacy logical backups remain supported.")
         Button(onClick = onImport, enabled = enabled, modifier = Modifier.fillMaxWidth().height(54.dp)) {
             Text("SELECT BACKUP ARCHIVE")
         }

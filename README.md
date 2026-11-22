@@ -10,7 +10,7 @@ This README is the central project overview and local development guide.
 
 - **AzerothCore server:** An Android ARM64 build of the pinned AzerothCore fork, including `authserver` and `worldserver`.
 - **Embedded realm database:** MariaDB is packaged with the app runtime; the app is designed to initialize and manage it locally.
-- **Android management app:** A Kotlin/Jetpack Compose app with initial setup, server start/stop and status, activity logs and console, account management, network settings, mod controls and configuration, and realm backup import.
+- **Android management app:** A Kotlin/Jetpack Compose app with initial setup, server start/stop and status, activity logs and console, account management, network settings, mod controls and configuration, and full realm backup export/restore.
 - **Solo-play features:** Playerbots and a curated set of AzerothCore modules for progression, quality of life, and gameplay customization.
 - **Bygdok modules:** Guild Mate for autonomous guild characters, feature-rich LLM Chatter for AI-powered bot dialogue, and Transmog Plus for slot-based transmogrification.
 - **Separate game data:** Maps, vmaps, mmaps, and dbc data are downloaded on first run; they are not included in the APK.
@@ -91,7 +91,57 @@ Before launching authserver, the app clears the temporary version-mismatch flag 
 
 Connect using a compatible WoW 3.3.5a client configured with the realm address set in the app. Use the account created during setup. The game client is separate; this project does not require a particular client-running solution such as Winlator. Network access from another device depends on the address and network configuration; remote connectivity is not guaranteed by this README.
 
-The dashboard also provides **Accounts**, **Network**, **Console**, **Import** and **Mods** tabs. Use Import when restoring a supported realm backup rather than repeating first-time setup.
+The dashboard also provides **Accounts**, **Network**, **Console**, **Backup** and **Mods** tabs.
+
+### Full realm backup and restore
+
+1. Save or discard mod edits, stop the realm, and wait until **all** components
+   (including MariaDB and Ollama) are stopped.
+2. Open **Backup > Export full realm** and choose a ZIP destination using
+   Android's file picker. Save outside the app's private storage, such as
+   Downloads or a document provider. Wait for the success message; do not use
+   an interrupted or failed export.
+3. Keep the ZIP and a copy of the APK used to create it somewhere safe.
+
+The full backup includes the entire stopped MariaDB data directory: accounts,
+characters, playerbots, world customizations, module tables, AI memories and
+database users/grants. It also includes downloaded maps/vmaps/mmaps/DBC data,
+Ollama model blobs/manifests, local AI state, imported GPU drivers and their
+selection, saved mod configurations, realm server configurations, realm name,
+setup status and network preferences. Empty files/directories are preserved.
+Only APK-generated binaries, SQL/provider assets, temporary runtime files,
+linker symlinks, sockets and PID files are excluded; they are recreated by the
+installed app. Server settings survive restore, with device-specific paths
+reapplied on startup.
+
+After a fresh install, choose **Import existing realm** on the first-run
+screen **before starting MariaDB**. Select the full backup instead of creating
+a new realm. For an existing installation, stop all components and select
+**Backup > Select backup archive**. Restore replaces the realm, mod settings,
+models, drivers and app preferences rather than merging them. Every file's
+SHA-256 and size are checked before replacement. The previous installation
+is retained during replacement; failed/interrupted replacements roll back
+using a persistent recovery journal when the realm service next starts.
+
+These are **physical database snapshots**, not cross-version SQL migrations.
+Restore requires the same bundled MariaDB executable as the exporting app;
+incompatible runtimes are rejected before replacement. Using the same APK is
+recommended to preserve core/module behavior too. A fresh install can then
+start without re-downloading included client data or models. Network addresses
+are restored unchanged; update them in **Network** if the device/network changed.
+Imported drivers still require compatible hardware and Android versions.
+
+Backups are **not encrypted** and can contain account credentials, provider
+API keys and private chat history. Only restore trusted backups, especially
+because they can include native GPU drivers. Large realms/models produce
+multi-GB ZIPs; choose a destination supporting large files. Restore needs
+space for the selected ZIP and its expanded contents in addition to any
+current realm retained for rollback. The separate game client and its addons,
+and models hosted by external providers, are outside app-owned storage and
+are not included.
+
+Legacy logical ZIP/tar.gz database imports remain supported, but they do not
+provide the complete restoration guarantees of the app's new full backups.
 
 ### Managing mods
 
@@ -253,7 +303,7 @@ previous driver. These checks do not prove that native code is trustworthy:
 imported drivers execute with the app's permissions. Do not import unknown ZIPs.
 
 Drivers stay in app-private storage across compatible updates, not uninstall or
-Clear data, and are not included in realm backups. Driver ZIPs are never bundled
+Clear data, and are included in full realm backups (not legacy logical backups). Driver ZIPs are never bundled
 in the APK or uploaded by the build. The optional local `runtime/drivers/*.zip`
 directory is ignored by Git. The APK includes pinned BSD-licensed AdrenoTools
 and its helper libraries; this loader is used only by the Ollama Vulkan backend.

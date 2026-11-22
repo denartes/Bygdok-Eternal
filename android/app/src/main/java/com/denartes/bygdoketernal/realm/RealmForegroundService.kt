@@ -72,17 +72,55 @@ class RealmForegroundService : Service() {
     private var logTailJob: Job? = null
 
     private lateinit var paths: RealmPaths
+    private var backupRecoveryFailed = false
+
+    private val backupWorkspace: File
+        get() = File(noBackupFilesDir, "realm-backup")
+
+    private fun backupTransaction(): RealmBackupTransaction {
+        val settings = RealmBackupSettings(this)
+        return RealmBackupTransaction(filesDir, backupWorkspace, settings::read, settings::write)
+    }
 
     override fun onCreate() {
         super.onCreate()
         paths = RealmPaths(this)
         createNotificationChannel()
+        try {
+            backupTransaction().recover()
+        } catch (error: Exception) {
+            backupRecoveryFailed = true
+            RealmRuntime.appendLog("[backup] Restore recovery failed; original files retained: ${error.message}")
+            RealmRuntime.updateState { it.copy(phase = RealmPhase.FAILED) }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (backupRecoveryFailed) {
+            startForeground(NOTIFICATION_ID, buildNotification("Realm restore recovery failed; data retained"))
+            RealmRuntime.appendLog("[backup] Realm action blocked until restore recovery succeeds")
+            return START_NOT_STICKY
+        }
+        if (RealmRuntime.state.value.phase in
+            listOf(RealmPhase.EXPORTING_REALM, RealmPhase.IMPORTING_REALM)) {
+            RealmRuntime.appendLog("[backup] Action blocked while backup or restore recovery is in progress")
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
+            ACTION_EXPORT_REALM -> {
+                val uri = intent.data
+                if (uri == null || !RealmRuntime.state.value.canBackup || RealmRuntime.botAccounts.value.busy) {
+                    RealmRuntime.appendLog("[backup] Stop all realm components before exporting a backup")
+                    return START_NOT_STICKY
+                }
+                val previous = RealmRuntime.state.value
+                RealmRuntime.updateState { it.copy(phase = RealmPhase.EXPORTING_REALM) }
+                startForeground(NOTIFICATION_ID, buildNotification("Exporting full realm backup..."))
+                scope.launch { lifecycleMutex.withLock { exportFullBackup(uri, previous) } }
+                return START_NOT_STICKY
+            }
             ACTION_START_REALM -> {
                 if (stopJob?.isActive == true) return START_NOT_STICKY
                 intentionalStop = false
@@ -114,10 +152,14 @@ class RealmForegroundService : Service() {
                 if (archiveUri == null) {
                     RealmRuntime.appendLog("[import] No backup archive was selected")
                 } else {
+                    if (RealmRuntime.state.value.isBusy || RealmRuntime.botAccounts.value.busy) {
+                        RealmRuntime.appendLog("[import] Wait for the current realm operation to finish")
+                        return START_NOT_STICKY
+                    }
                     startForeground(NOTIFICATION_ID, buildNotification("Preparing realm import..."))
                     scope.launch { lifecycleMutex.withLock { importRealm(archiveUri) } }
                 }
-                return START_STICKY
+                return START_NOT_STICKY
             }
             ACTION_STOP -> {
                 if (stopJob?.isActive == true) return START_NOT_STICKY
@@ -302,6 +344,82 @@ class RealmForegroundService : Service() {
         }
     }
 
+    private fun requireStoppedBackupProcesses() {
+        check(listOf(mariadbProcess, authserverProcess, worldserverProcess).none { it?.isAlive == true } &&
+            ollama == null && llmChatterBridge == null) { "Stop all realm components before backup or restore" }
+        for (port in listOf(3306, 3724, 8085, RealmOllamaConfig.PORT)) {
+            java.net.ServerSocket().use { socket ->
+                socket.reuseAddress = true
+                socket.bind(java.net.InetSocketAddress("127.0.0.1", port))
+            }
+        }
+    }
+
+    private fun exportFullBackup(uri: android.net.Uri, previous: RealmState) {
+        try {
+            requireStoppedBackupProcesses()
+            val settings = RealmBackupSettings(this).read()
+            check(settings.getBoolean("setup_complete")) { "Complete realm setup before exporting a backup" }
+            RealmRuntime.appendLog("[backup] Export started; includes databases, client data, AI models, drivers and settings")
+            val binary = File(paths.nativeLibraryDir, "libpocket_mariadbd.so")
+            val version = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
+            checkNotNull(contentResolver.openOutputStream(uri, "wt")) { "Could not open backup destination" }.use { output ->
+                RealmFullBackup.export(filesDir, output, settings, RealmFullBackup.fingerprint(binary), version) {
+                    RealmRuntime.appendLog("[backup] $it")
+                    updateNotification("Exporting backup: $it")
+                }
+            }
+            RealmRuntime.appendLog("[backup] Full realm backup exported successfully")
+            updateNotification("Full realm backup complete")
+        } catch (error: Exception) {
+            RealmRuntime.appendLog("[backup] Export failed; do not use the incomplete archive: ${error.message}")
+            try {
+                check(android.provider.DocumentsContract.deleteDocument(contentResolver, uri)) {
+                    "Document provider did not delete the incomplete backup"
+                }
+            } catch (cleanup: Exception) {
+                RealmRuntime.appendLog("[backup] Could not delete incomplete archive; remove it manually: ${cleanup.message}")
+            }
+            updateNotification("Realm backup failed")
+        } finally {
+            RealmRuntime.updateState { previous }
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+    }
+
+    private fun restoreFullBackup(archive: File, previous: RealmState) {
+        check(previous.canBackup) { "Stop all realm components before restoring a full backup" }
+        requireStoppedBackupProcesses()
+        backupTransaction().recover()
+        check(backupWorkspace.isDirectory || backupWorkspace.mkdirs()) { "Could not create restore workspace" }
+        val staging = File(backupWorkspace, "staging")
+        check(!staging.exists() || staging.deleteRecursively()) { "Could not clear previous restore staging" }
+        try {
+            updateNotification("Validating complete realm backup...")
+            var lastProgress = 0L
+            val settings = RealmFullBackup.extract(archive, staging,
+                RealmFullBackup.fingerprint(File(paths.nativeLibraryDir, "libpocket_mariadbd.so"))) {
+                val now = System.currentTimeMillis()
+                if (now - lastProgress >= 1000) {
+                    updateNotification(it)
+                    lastProgress = now
+                }
+            }
+            RealmBackupSettings(this).validate(settings)
+            check(settings.getBoolean("setup_complete")) { "Backup does not contain a completed realm setup" }
+            RealmRuntime.appendLog("[import] Full backup checksums validated; replacing stopped realm")
+            backupTransaction().install(staging, settings)
+            RealmRuntime.resetToDefault()
+            RealmRuntime.onBackupRestored()
+            RealmRuntime.appendLog("[import] Full realm restored, including client data, AI models, drivers and saved settings")
+            updateNotification("Full realm restored; start the realm")
+        } finally {
+            if (!File(backupWorkspace, "journal.json").exists()) {
+                check(!staging.exists() || staging.deleteRecursively()) { "Could not remove restore staging" }
+            }
+        }
+    }
+
     private suspend fun importRealm(archiveUri: android.net.Uri) {
         RealmRuntime.setBotAccounts(BotAccountState())
         val stateBeforeImport = RealmRuntime.state.value
@@ -320,6 +438,10 @@ class RealmForegroundService : Service() {
             contentResolver.openInputStream(archiveUri).use { input ->
                 checkNotNull(input) { "Could not open selected backup" }
                 archive.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (RealmFullBackup.isFullBackup(archive)) {
+                restoreFullBackup(archive, stateBeforeImport)
+                return
             }
             val prepared = RealmBackupImporter.extractAndValidate(archive, preparedDir)
             RealmRuntime.appendLog("[import] Archive validated; stopping realm processes")
@@ -362,6 +484,10 @@ class RealmForegroundService : Service() {
             }
         } catch (error: Throwable) {
             RealmRuntime.appendLog("[import] Import rejected: ${error.message}")
+            if (File(backupWorkspace, "journal.json").exists()) {
+                backupRecoveryFailed = true
+                RealmRuntime.appendLog("[backup] Restore rollback needs recovery; realm actions are blocked until app restart")
+            }
             RealmRuntime.updateState { stateBeforeImport }
             updateNotification("Realm import rejected")
         } finally {
@@ -1418,6 +1544,7 @@ class RealmForegroundService : Service() {
         const val ACTION_START_DATABASE_ONLY = "com.denartes.bygdoketernal.realm.START_DATABASE_ONLY"
         const val ACTION_COMPLETE_INITIAL_SETUP = "com.denartes.bygdoketernal.realm.COMPLETE_INITIAL_SETUP"
         const val ACTION_IMPORT_REALM = "com.denartes.bygdoketernal.realm.IMPORT_REALM"
+        const val ACTION_EXPORT_REALM = "com.denartes.bygdoketernal.realm.EXPORT_REALM"
         const val ACTION_CONSOLE_COMMAND = "com.denartes.bygdoketernal.realm.CONSOLE_COMMAND"
         const val ACTION_REFRESH_ACCOUNTS = "com.denartes.bygdoketernal.realm.REFRESH_ACCOUNTS"
         const val ACTION_BOT_ACCOUNTS = "com.denartes.bygdoketernal.realm.BOT_ACCOUNTS"
