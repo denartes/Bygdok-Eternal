@@ -19,6 +19,7 @@ enum class RealmPhase {
     DATABASE_READY,
     CONFIGURING_INITIAL_SETUP,
     IMPORTING_REALM,
+    EXPORTING_REALM,
     STARTING_AUTHSERVER,
     PREPARING_CLIENT_DATA,
     STARTING_WORLDSERVER,
@@ -44,6 +45,7 @@ data class RealmState(
             phase == RealmPhase.STARTING_DATABASE ||
             phase == RealmPhase.CONFIGURING_INITIAL_SETUP ||
             phase == RealmPhase.IMPORTING_REALM ||
+            phase == RealmPhase.EXPORTING_REALM ||
             phase == RealmPhase.STARTING_AUTHSERVER ||
             phase == RealmPhase.PREPARING_CLIENT_DATA ||
             phase == RealmPhase.STARTING_WORLDSERVER
@@ -52,6 +54,10 @@ data class RealmState(
         get() = !isBusy &&
             authserver !in listOf(ComponentStatus.STARTING, ComponentStatus.RUNNING) &&
             worldserver !in listOf(ComponentStatus.STARTING, ComponentStatus.RUNNING)
+
+    val canBackup: Boolean
+        get() = !isBusy && listOf(database, authserver, worldserver, ollama)
+            .none { it == ComponentStatus.STARTING || it == ComponentStatus.RUNNING }
 }
 
 data class RealmAccount(
@@ -130,6 +136,15 @@ object RealmRuntime {
 
     private val _realmName = MutableStateFlow("AzerothCore")
     val realmName = _realmName.asStateFlow()
+
+    private val _restoreRevision = MutableStateFlow(0)
+    val restoreRevision = _restoreRevision.asStateFlow()
+
+    fun onBackupRestored() {
+        _accounts.value = emptyList()
+        _botAccounts.value = BotAccountState()
+        _restoreRevision.update { it + 1 }
+    }
 
     private val _botAccounts = MutableStateFlow(BotAccountState())
     val botAccounts = _botAccounts.asStateFlow()

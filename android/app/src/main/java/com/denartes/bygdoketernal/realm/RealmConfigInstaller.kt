@@ -31,7 +31,9 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
                 ?: patchDirective(line, "PlayerbotsDatabaseInfo", ".;${paths.socketFile.absolutePath};acore;acore;acore_playerbots")
                 ?: line
         }
-        File(paths.etcDir, "my.cnf").writeText("[mysqld]\nversion=8.0.36\n")
+        val databaseConfig = File(paths.etcDir, "my.cnf")
+        databaseConfig.writeText(mergeRealmServerConfig("[mysqld]\nversion=8.0.36\n",
+            if (databaseConfig.isFile) databaseConfig.readText() else null))
         realmModConfigStore(context).install(paths.modulesConfigDir)
         replaceBundledRealmSql(paths.sqlDir) { destination ->
             copyAssetTreeIfPresent("sql", destination)
@@ -48,7 +50,8 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
 
     private fun installConfig(assetName: String, destination: File, patchLine: (String) -> String) {
         val text = context.assets.open(assetName).bufferedReader().use { it.readText() }
-        val patched = text.lineSequence().joinToString("\n") { patchLine(it) }
+        val existing = if (destination.isFile) destination.readText() else null
+        val patched = mergeRealmServerConfig(text, existing).lineSequence().joinToString("\n") { patchLine(it) }
         destination.writeText(patched)
     }
 
@@ -77,6 +80,24 @@ class RealmConfigInstaller(private val context: Context, private val paths: Real
             copyAssetTreeIfPresent("$assetPath/$entry", File(destinationDir, entry))
         }
     }
+}
+
+internal fun mergeRealmServerConfig(baseline: String, saved: String?): String {
+    if (saved == null) return baseline
+    val assignment = Regex("""^\s*([A-Za-z][A-Za-z0-9_.]*)\s*=""")
+    val savedLines = saved.lineSequence().mapNotNull { line ->
+        assignment.find(line)?.groupValues?.get(1)?.let { it to line }
+    }.toMap()
+    val known = mutableSetOf<String>()
+    val merged = baseline.lineSequence().map { line ->
+        val key = assignment.find(line)?.groupValues?.get(1)
+        if (key == null) line else {
+            known.add(key)
+            savedLines[key] ?: line
+        }
+    }.toMutableList()
+    merged.addAll(savedLines.filterKeys { it !in known }.values)
+    return merged.joinToString("\n")
 }
 
 internal fun replaceBundledRealmSql(destination: File, copyAssets: (File) -> Unit) {
