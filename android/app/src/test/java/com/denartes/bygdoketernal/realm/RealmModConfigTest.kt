@@ -241,7 +241,7 @@ class RealmModConfigTest {
         val manifest = File(repo, "modules/manifest.json").readText()
         val ids = Regex(""""name"\s*:\s*"([^"]+)"""").findAll(manifest).map { it.groupValues[1] }.toSet()
         assertEquals(ids, RealmMods.all.map { it.id }.toSet())
-        assertEquals(15, RealmMods.all.size)
+        assertEquals(16, RealmMods.all.size)
         for (definition in RealmMods.all) {
             val canonical = File(repo, "configs/modules/${definition.configFile}")
             val template = File(repo, "configs/modules/${definition.configFile}.dist")

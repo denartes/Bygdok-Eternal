@@ -1,0 +1,6 @@
+## Interface: 30300
+## Title: Bygdok Single Button Assistant
+## Notes: Sends a single-button Retribution Paladin rotation request to the realm.
+## SavedVariablesPerCharacter: BygdokAssistantSettings
+
+BygdokAssistant.lua

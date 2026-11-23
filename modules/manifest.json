@@ -75,6 +75,10 @@
       "name": "mod-llm-chatter",
       "upstream": "https://github.com/Hokken/mod-llm-chatter",
       "commit": "fab826567008ad03a055e349b253262225fd0dc0"
+    },
+    {
+      "name": "mod-single-button-assistant",
+      "origin": "Bygdok Eternal; maintained in this repository"
     }
   ]
 }

@@ -37,7 +37,9 @@ object RealmMods {
         RealmModDefinition("mod-transmog-plus", "Transmog Plus", "mod_transmog_plus.conf", listOf("Transmog.Enable"),
             warning = "Saved appearances remain when disabled."),
         RealmModDefinition("mod-llm-chatter", "LLM Chatter", "mod_llm_chatter.conf", listOf("LLMChatter.Enable"), true,
-            "The bridge starts with the realm. Configure a local Ollama or hosted provider in this file.")
+            "The bridge starts with the realm. Configure a local Ollama or hosted provider in this file."),
+        RealmModDefinition("mod-single-button-assistant", "Single Button Assistant", "mod_single_button_assistant.conf",
+            listOf("SingleButtonAssistant.Enable"))
     )
     val playerbots = all.single { it.id == "mod-playerbots" }
 }
