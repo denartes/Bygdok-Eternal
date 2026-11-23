@@ -1,0 +1,8 @@
+[worldserver]
+
+########################################
+# Single Button Assistant
+########################################
+
+# Enables the Retribution Paladin single-target damage button.
+SingleButtonAssistant.Enable = 1

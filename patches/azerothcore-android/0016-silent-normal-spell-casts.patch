@@ -1,0 +1,24 @@
+diff --git a/src/server/game/Spells/SpellDefines.h b/src/server/game/Spells/SpellDefines.h
+--- a/src/server/game/Spells/SpellDefines.h
++++ b/src/server/game/Spells/SpellDefines.h
+@@ -161,6 +161,7 @@ enum TriggerCastFlags
+     TRIGGERED_NO_PERIODIC_RESET                     = 0x00100000,   //! Periodic aura tick wont be reset on override
+     TRIGGERED_IGNORE_EFFECTS                        = 0x00200000,   //! Ignore spell effects - used for ritual portals
+     TRIGGERED_DONT_ENTER_COMBAT                     = 0x00400000,   //! Skips hostile-target combat calls on launch/hit
++    TRIGGERED_SILENT_NORMAL_CAST                    = 0x00800000,   //! Suppress cast errors without making the spell triggered
+     TRIGGERED_FULL_DEBUG_MASK                       = 0xFFFFFFFF
+ };
+ 
+diff --git a/src/server/game/Spells/Spell.cpp b/src/server/game/Spells/Spell.cpp
+--- a/src/server/game/Spells/Spell.cpp
++++ b/src/server/game/Spells/Spell.cpp
+@@ -4855,7 +4855,8 @@ void Spell::SendCastResult(SpellCastResult result)
+         return;
+ 
+     // Xinef: override every possible result, except for gm fail result... breaks many things and goes unnoticed because of this and makes me rage when i find this out
+-    if (HasTriggeredCastFlag(TRIGGERED_DONT_REPORT_CAST_ERROR) && result != SPELL_FAILED_BM_OR_INVISGOD)
++    if ((HasTriggeredCastFlag(TRIGGERED_DONT_REPORT_CAST_ERROR) || HasTriggeredCastFlag(TRIGGERED_SILENT_NORMAL_CAST)) &&
++        result != SPELL_FAILED_BM_OR_INVISGOD)
+         result = SPELL_FAILED_DONT_REPORT;
+ 
+     SendCastResult(unitCaster->ToPlayer(), m_spellInfo, m_cast_count, result, m_customError);

@@ -19,6 +19,7 @@ KEPT_MODULES = {
     "mod-emblem-transfer", "mod-guildhouse", "mod-instance-reset", "mod-npc-enchanter",
     "mod-reagent-bank", "mod-playerbots", "mod-player-bot-level-brackets",
     "mod-individual-progression", "mod-guild-mate", "mod-transmog-plus", "mod-llm-chatter",
+    "mod-single-button-assistant",
 }
 
 
@@ -121,7 +122,7 @@ class StageServerModulesTest(unittest.TestCase):
         source = ROOT / "modules"
         manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual({module["name"] for module in manifest["modules"]}, KEPT_MODULES)
-        self.assertEqual(len(manifest["modules"]), 15)
+        self.assertEqual(len(manifest["modules"]), 16)
         self.assertEqual({path.name for path in source.iterdir() if path.is_dir()}, KEPT_MODULES)
         with patch.object(socket, "socket", side_effect=AssertionError("Network not allowed")), \
              patch("subprocess.Popen", side_effect=AssertionError("External process not allowed")), \
