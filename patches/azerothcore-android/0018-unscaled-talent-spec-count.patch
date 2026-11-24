@@ -1,0 +1,15 @@
+diff --git a/src/server/game/Entities/Unit/Unit.cpp b/src/server/game/Entities/Unit/Unit.cpp
+index 03eafa2..c7b555b 100644
+--- a/src/server/game/Entities/Unit/Unit.cpp
++++ b/src/server/game/Entities/Unit/Unit.cpp
+@@ -11395,6 +11395,10 @@ Unit* Creature::SelectVictim()
+ 
+ float Unit::ApplyEffectModifiers(SpellInfo const* spellProto, uint8 effect_index, float value) const
+ {
++    // Specialization counts are slot numbers, not scalable spell power.
++    if (spellProto->Effects[effect_index].Effect == SPELL_EFFECT_TALENT_SPEC_COUNT)
++        return value;
++
+     if (Player* modOwner = GetSpellModOwner())
+     {
+         modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_ALL_EFFECTS, value);

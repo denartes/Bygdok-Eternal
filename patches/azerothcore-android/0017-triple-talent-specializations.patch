@@ -1,0 +1,354 @@
+diff --git a/src/server/game/Entities/Player/Player.cpp b/src/server/game/Entities/Player/Player.cpp
+index 5f72913..f350ddc 100644
+--- a/src/server/game/Entities/Player/Player.cpp
++++ b/src/server/game/Entities/Player/Player.cpp
+@@ -14788,12 +14788,18 @@ bool Player::CanSeeTrainer(Creature const* creature) const
+ void Player::BuildPlayerTalentsInfoData(WorldPacket* data)
+ {
+     *data << uint32(GetFreeTalentPoints());                 // unspentTalentPoints
+-    *data << uint8(m_specsCount);                           // talent group count (0, 1 or 2)
+-    *data << uint8(m_activeSpec);                           // talent group index (0 or 1)
+ 
+     if (m_specsCount > MAX_TALENT_SPECS)
++    {
++        LOG_ERROR("entities.player", "Player {} has invalid talent specialization count {}.", GetGUID().ToString(), m_specsCount);
+         m_specsCount = MAX_TALENT_SPECS;
++    }
+ 
++    if (m_activeSpec >= m_specsCount)
++        m_activeSpec = 0;
++
++    *data << uint8(m_specsCount);                           // talent group count (0 to 3)
++    *data << uint8(m_activeSpec);                           // talent group index (0 to 2)
+     for (uint32 specIdx = 0; specIdx < m_specsCount; ++specIdx)
+     {
+         uint8 talentIdCount = 0;
+@@ -15541,10 +15547,14 @@ void Player::_SaveTalents(CharacterDatabaseTransaction trans)
+ void Player::ActivateSpec(uint8 spec)
+ {
+     // xinef: some basic checks
+-    if (GetActiveSpec() == spec)
++    if (!IsValidTalentSpecIndex(spec, GetSpecsCount()))
++    {
++        LOG_ERROR("entities.player", "Player {} attempted to activate locked talent specialization {} (unlocked: {}).",
++            GetGUID().ToString(), spec, GetSpecsCount());
+         return;
++    }
+ 
+-    if (spec > GetSpecsCount())
++    if (GetActiveSpec() == spec)
+         return;
+ 
+     // xinef: interrupt currently casted spell just in case
+@@ -15648,7 +15658,7 @@ void Player::ActivateSpec(uint8 spec)
+         }
+     }
+ 
+-    // xinef: apply glyphs from second spec
++    // xinef: apply glyphs from the newly activated spec
+     if (GetActiveSpec() != oldSpec)
+     {
+         for (uint8 slot = 0; slot < MAX_GLYPH_SLOT_INDEX; ++slot)
+diff --git a/src/server/game/Entities/Player/Player.h b/src/server/game/Entities/Player/Player.h
+index b78f197..7f35670 100644
+--- a/src/server/game/Entities/Player/Player.h
++++ b/src/server/game/Entities/Player/Player.h
+@@ -1763,7 +1763,7 @@ public:
+     void AddBonusTalent(uint32 count) { m_extraBonusTalentCount += count; };
+     void RemoveBonusTalent(uint32 count) { m_extraBonusTalentCount -= count; };
+ 
+-    // Dual Spec
++    // Talent specializations
+     void UpdateSpecCount(uint8 count);
+     [[nodiscard]] uint8 GetActiveSpec() const { return m_activeSpec; }
+     [[nodiscard]] uint8 GetActiveSpecMask() const { return (1 << m_activeSpec); }
+diff --git a/src/server/game/Entities/Player/PlayerGossip.cpp b/src/server/game/Entities/Player/PlayerGossip.cpp
+index dc6a489..0093b81 100644
+--- a/src/server/game/Entities/Player/PlayerGossip.cpp
++++ b/src/server/game/Entities/Player/PlayerGossip.cpp
+@@ -89,8 +89,11 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId /*= 0*/, bool
+                     break;
+                 }
+                 case GOSSIP_OPTION_LEARNDUALSPEC:
++                    if (!(GetSpecsCount() < MAX_TALENT_SPECS && creature->CanResetTalents(this) && GetLevel() >= sWorld->getIntConfig(CONFIG_MIN_DUALSPEC_LEVEL)))
++                        canTalk = false;
++                    break;
+                 case GOSSIP_OPTION_DUALSPEC_INFO:
+-                    if (!(GetSpecsCount() == 1 && creature->CanResetTalents(this) && !(GetLevel() < sWorld->getIntConfig(CONFIG_MIN_DUALSPEC_LEVEL))))
++                    if (!(GetSpecsCount() == 1 && creature->CanResetTalents(this) && GetLevel() >= sWorld->getIntConfig(CONFIG_MIN_DUALSPEC_LEVEL)))
+                         canTalk = false;
+                     break;
+                 case GOSSIP_OPTION_UNLEARNTALENTS:
+@@ -336,12 +339,17 @@ void Player::OnGossipSelect(WorldObject* source, uint32 gossipListId, uint32 men
+             GetSession()->SendTrainerList(source->ToCreature());
+             break;
+         case GOSSIP_OPTION_LEARNDUALSPEC:
+-            if (GetSpecsCount() == 1 && GetLevel() >= sWorld->getIntConfig(CONFIG_MIN_DUALSPEC_LEVEL))
++            if (GetSpecsCount() < MAX_TALENT_SPECS && GetLevel() >= sWorld->getIntConfig(CONFIG_MIN_DUALSPEC_LEVEL) && source->ToCreature()->CanResetTalents(this))
+             {
+-                // Cast spells that teach dual spec
+-                // Both are also ImplicitTarget self and must be cast by player
+-                CastSpell(this, 63680, true, nullptr, nullptr, GetGUID());
+-                CastSpell(this, 63624, true, nullptr, nullptr, GetGUID());
++                if (GetSpecsCount() == 1)
++                {
++                    // Cast spells that teach dual spec
++                    // Both are also ImplicitTarget self and must be cast by player
++                    CastSpell(this, 63680, true, nullptr, nullptr, GetGUID());
++                    CastSpell(this, 63624, true, nullptr, nullptr, GetGUID());
++                }
++                else
++                    UpdateSpecCount(MAX_TALENT_SPECS);
+ 
+                 PrepareGossipMenu(source, menuItemData->GossipActionMenuId);
+                 SendPreparedGossip(source);
+diff --git a/src/server/game/Entities/Player/PlayerStorage.cpp b/src/server/game/Entities/Player/PlayerStorage.cpp
+index c311784..840d819 100644
+--- a/src/server/game/Entities/Player/PlayerStorage.cpp
++++ b/src/server/game/Entities/Player/PlayerStorage.cpp
+@@ -5544,7 +5544,26 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
+     // apply original stats mods before spell loading or item equipment that call before equip _RemoveStatsMods()
+ 
+     m_specsCount = fields[64].Get<uint8>();
++    if (m_specsCount == 0)
++    {
++        LOG_ERROR("entities.player", "Character {} has invalid talent specialization count {}; loading as one specialization.",
++            GetGUID().ToString(), m_specsCount);
++        m_specsCount = 1;
++    }
++    else if (m_specsCount > MAX_TALENT_SPECS)
++    {
++        LOG_ERROR("entities.player", "Character {} has invalid talent specialization count {}; clamping to {}.",
++            GetGUID().ToString(), m_specsCount, MAX_TALENT_SPECS);
++        m_specsCount = MAX_TALENT_SPECS;
++    }
++
+     m_activeSpec = fields[65].Get<uint8>();
++    if (!IsValidTalentSpecIndex(m_activeSpec, m_specsCount))
++    {
++        LOG_ERROR("entities.player", "Character {} has invalid active talent specialization {}; loading the primary specialization.",
++            GetGUID().ToString(), m_activeSpec);
++        m_activeSpec = 0;
++    }
+ 
+     LearnDefaultSkills();
+     LearnCustomSpells();
+diff --git a/src/server/game/Entities/Player/PlayerUpdates.cpp b/src/server/game/Entities/Player/PlayerUpdates.cpp
+index 5765a19..0a15ee6 100644
+--- a/src/server/game/Entities/Player/PlayerUpdates.cpp
++++ b/src/server/game/Entities/Player/PlayerUpdates.cpp
+@@ -2249,6 +2249,16 @@ void Player::UpdateFallInformationIfNeed(MovementInfo const& minfo,
+ void Player::UpdateSpecCount(uint8 count)
+ {
+     uint32 curCount = GetSpecsCount();
++    LOG_INFO("spells.spec", "SPEC_DIAG_V1 update player={} guid={} requested={} current={} active={}",
++        GetName(), GetGUID().ToString(), count, curCount, GetActiveSpec());
++
++    if (!IsValidTalentSpecCount(count))
++    {
++        LOG_ERROR("entities.player", "Player {} attempted to set invalid talent specialization count {}.",
++            GetGUID().ToString(), count);
++        return;
++    }
++
+     if (curCount == count)
+         return;
+ 
+@@ -2262,17 +2272,21 @@ void Player::UpdateSpecCount(uint8 count)
+     if (count > curCount)
+     {
+         _SaveActions(trans); // make sure the button list is cleaned up
+-        for (ActionButtonList::iterator itr = m_actionButtons.begin();
+-             itr != m_actionButtons.end(); ++itr)
++        for (uint8 spec = GetSpecsCount(); spec < count; ++spec)
+         {
+-            stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_ACTION);
+-            stmt->SetData(0, GetGUID().GetCounter());
+-            stmt->SetData(1, 1);
+-            stmt->SetData(2, itr->first);
+-            stmt->SetData(3, itr->second.GetAction());
+-            stmt->SetData(4, uint8(itr->second.GetType()));
+-            trans->Append(stmt);
++            for (ActionButtonList::iterator itr = m_actionButtons.begin();
++                 itr != m_actionButtons.end(); ++itr)
++            {
++                stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_ACTION);
++                stmt->SetData(0, GetGUID().GetCounter());
++                stmt->SetData(1, spec);
++                stmt->SetData(2, itr->first);
++                stmt->SetData(3, itr->second.GetAction());
++                stmt->SetData(4, uint8(itr->second.GetType()));
++                trans->Append(stmt);
++            }
+         }
++        SetNeedToSaveGlyphs(true);
+     }
+     // Delete spec data for removed spec.
+     else if (count < curCount)
+@@ -2293,6 +2307,9 @@ void Player::UpdateSpecCount(uint8 count)
+     SetSpecsCount(count);
+ 
+     SendTalentsInfoData(false);
++    LOG_INFO("spells.spec", "SPEC_DIAG_V1 update completed player={} count={} active={} talent_packet_sent=true",
++        GetName(), GetSpecsCount(), GetActiveSpec());
++
+ }
+ 
+ void Player::SendUpdateWorldState(uint32 variable, uint32 value) const
+diff --git a/src/server/game/Scripting/ScriptDefines/PlayerScript.h b/src/server/game/Scripting/ScriptDefines/PlayerScript.h
+index be1969b..4e52863 100644
+--- a/src/server/game/Scripting/ScriptDefines/PlayerScript.h
++++ b/src/server/game/Scripting/ScriptDefines/PlayerScript.h
+@@ -294,7 +294,7 @@ public:
+     // Called when a player attempts to put a point in a talent.
+     virtual bool OnPlayerCanLearnTalent(Player* /*player*/, TalentEntry const* /*talent*/, uint32 /*rank*/) { return true; }
+ 
+-    // Called after a player switches specs using the dual spec system
++    // Called after a player switches talent specializations.
+     virtual void OnPlayerAfterSpecSlotChanged(Player* /*player*/, uint8 /*newSlot*/) { }
+ 
+     // Called for player::update
+@@ -916,7 +916,7 @@ public:
+      * Player::learnSpell reaches it, and so does a trainer about to cast a wrapper entry (below);
+      * spells written through addSpell do not. Those bypasses include character loading
+      * (_LoadSpells, and the initial class and skill-rewarded spells, which run on every login) and
+-     * talent spells from _addTalentAurasAndSpells, reapplied on every dual-spec switch -- so a
++     * talent spells from _addTalentAurasAndSpells, reapplied on every talent-spec switch -- so a
+      * refusal in world is undone the next time one of them runs.
+      *
+      * What it sees can be indirect: a trainer entry that wraps other spells (a paladin's Summon
+diff --git a/src/server/game/Spells/Spell.cpp b/src/server/game/Spells/Spell.cpp
+index 3ebd08d..e7cbdfb 100644
+--- a/src/server/game/Spells/Spell.cpp
++++ b/src/server/game/Spells/Spell.cpp
+@@ -5864,6 +5864,11 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGOT
+ 
+     bool preventDefault = CallScriptEffectHandlers((SpellEffIndex)i, mode);
+ 
++    if (m_spellInfo->Id == 63624)
++        LOG_INFO("spells.spec", "SPEC_DIAG_V1 dispatch spell={} effect={} mode={} value={} target={} prevented={}",
++            m_spellInfo->Id, uint32(eff), uint32(mode), damage,
++            unitTarget ? unitTarget->GetGUID().ToString() : "none", preventDefault);
++
+     if (!preventDefault && eff < TOTAL_SPELL_EFFECTS)
+     {
+         (this->*SpellEffects[eff])((SpellEffIndex)i);
+diff --git a/src/server/game/Spells/SpellEffects.cpp b/src/server/game/Spells/SpellEffects.cpp
+index d684660..f084f0b 100644
+--- a/src/server/game/Spells/SpellEffects.cpp
++++ b/src/server/game/Spells/SpellEffects.cpp
+@@ -230,8 +230,8 @@ pEffect SpellEffects[TOTAL_SPELL_EFFECTS] =
+     &Spell::EffectMilling,                                  //158 SPELL_EFFECT_MILLING                  milling
+     &Spell::EffectRenamePet,                                //159 SPELL_EFFECT_ALLOW_RENAME_PET         allow rename pet once again
+     &Spell::EffectForceCast,                                //160 SPELL_EFFECT_FORCE_CAST_2
+-    &Spell::EffectSpecCount,                                //161 SPELL_EFFECT_TALENT_SPEC_COUNT        second talent spec (learn/revert)
+-    &Spell::EffectActivateSpec,                             //162 SPELL_EFFECT_TALENT_SPEC_SELECT       activate primary/secondary spec
++    &Spell::EffectSpecCount,                                //161 SPELL_EFFECT_TALENT_SPEC_COUNT        talent specialization count (learn/revert)
++    &Spell::EffectActivateSpec,                             //162 SPELL_EFFECT_TALENT_SPEC_SELECT       activate a talent specialization
+     &Spell::EffectNULL,                                     //163 unused
+     &Spell::EffectRemoveAura,                               //164 SPELL_EFFECT_REMOVE_AURA
+ };
+@@ -6483,7 +6483,20 @@ void Spell::EffectSpecCount(SpellEffIndex /*effIndex*/)
+ 
+     if (Player* player = unitTarget->ToPlayer())
+     {
+-        player->UpdateSpecCount(damage);
++        LOG_INFO("spells.spec", "SPEC_DIAG_V1 effect spell={} player={} guid={} value={} count_before={} active={}",
++            m_spellInfo->Id, player->GetName(), player->GetGUID().ToString(), damage,
++            player->GetSpecsCount(), player->GetActiveSpec());
++
++        if (damage < 1 || damage > MAX_TALENT_SPECS)
++        {
++            LOG_ERROR("spells.spec", "SPEC_DIAG_V1 rejected spell={} player={} invalid specialization count={}",
++                m_spellInfo->Id, player->GetName(), damage);
++            return;
++        }
++
++        player->UpdateSpecCount(uint8(damage));
++        LOG_INFO("spells.spec", "SPEC_DIAG_V1 effect completed spell={} player={} count_after={} active={}",
++            m_spellInfo->Id, player->GetName(), player->GetSpecsCount(), player->GetActiveSpec());
+     }
+ }
+ 
+@@ -6497,7 +6510,14 @@ void Spell::EffectActivateSpec(SpellEffIndex /*effIndex*/)
+ 
+     if (Player* player = unitTarget->ToPlayer())
+     {
+-        player->ActivateSpec(damage - 1); // damage is 1 or 2, spec is 0 or 1
++        if (damage == 0 || damage > MAX_TALENT_SPECS)
++        {
++            LOG_ERROR("spells.effect", "Spell {} attempted to activate invalid talent specialization value {} for player {}.",
++                m_spellInfo->Id, damage, player->GetGUID().ToString());
++            return;
++        }
++
++        player->ActivateSpec(uint8(damage - 1)); // Spell effect values are 1-based; specialization indices are 0-based.
+     }
+ }
+ 
+diff --git a/src/server/shared/SharedDefines.h b/src/server/shared/SharedDefines.h
+index 502a8a7..3936040 100644
+--- a/src/server/shared/SharedDefines.h
++++ b/src/server/shared/SharedDefines.h
+@@ -660,7 +660,17 @@ enum SpellAttr7 : uint32
+     SPELL_ATTR7_ALWAYS_CAST_LOG                               = 0x80000000  // TITLE Client indicator (client only)
+ };
+ 
+-#define MAX_TALENT_SPECS        2
++#define MAX_TALENT_SPECS        3
++
++constexpr bool IsValidTalentSpecCount(uint8 count)
++{
++    return count >= 1 && count <= MAX_TALENT_SPECS;
++}
++
++constexpr bool IsValidTalentSpecIndex(uint8 spec, uint8 count)
++{
++    return IsValidTalentSpecCount(count) && spec < count;
++}
+ #define MAX_GLYPH_SLOT_INDEX    6
+ 
+ // Custom values
+diff --git a/src/test/server/game/Entities/TripleTalentSpecTest.cpp b/src/test/server/game/Entities/TripleTalentSpecTest.cpp
+new file mode 100644
+index 0000000..66e6800
+--- /dev/null
++++ b/src/test/server/game/Entities/TripleTalentSpecTest.cpp
+@@ -0,0 +1,37 @@
++/*
++ * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program. If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "SharedDefines.h"
++#include "gtest/gtest.h"
++
++TEST(TalentSpecializationSlotsTest, AllowsOneToThreeSlots)
++{
++    EXPECT_FALSE(IsValidTalentSpecCount(0));
++    EXPECT_TRUE(IsValidTalentSpecCount(1));
++    EXPECT_TRUE(IsValidTalentSpecCount(2));
++    EXPECT_TRUE(IsValidTalentSpecCount(3));
++    EXPECT_FALSE(IsValidTalentSpecCount(4));
++}
++
++TEST(TalentSpecializationSlotsTest, RejectsLockedAndOutOfRangeSlots)
++{
++    EXPECT_TRUE(IsValidTalentSpecIndex(0, 1));
++    EXPECT_TRUE(IsValidTalentSpecIndex(1, 2));
++    EXPECT_TRUE(IsValidTalentSpecIndex(2, 3));
++    EXPECT_FALSE(IsValidTalentSpecIndex(2, 2));
++    EXPECT_FALSE(IsValidTalentSpecIndex(3, 3));
++    EXPECT_FALSE(IsValidTalentSpecIndex(0, 0));
++}

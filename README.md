@@ -9,6 +9,7 @@ This README is the central project overview and local development guide.
 ## What it includes
 
 - **AzerothCore server:** An Android ARM64 build of the pinned AzerothCore fork, including `authserver` and `worldserver`.
+- **Triple talent specializations:** Server-side support for three independent talent/glyph groups is maintained as a reproducible core patch; see [the implementation and native-client status](docs/triple-specialization.md).
 - **Embedded realm database:** MariaDB is packaged with the app runtime; the app is designed to initialize and manage it locally.
 - **Android management app:** A Kotlin/Jetpack Compose app with initial setup, server start/stop and status, activity logs and console, account management, network settings, mod controls and configuration, and full realm backup export/restore.
 - **Solo-play features:** Playerbots, a Retribution Paladin single-button combat assistant, and a curated set of AzerothCore modules for progression, quality of life, and gameplay customization.
