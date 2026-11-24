@@ -134,13 +134,16 @@ index c311784..840d819 100644
      LearnDefaultSkills();
      LearnCustomSpells();
 diff --git a/src/server/game/Entities/Player/PlayerUpdates.cpp b/src/server/game/Entities/Player/PlayerUpdates.cpp
-index 5765a19..4013aa7 100644
+index 5765a19..0a15ee6 100644
 --- a/src/server/game/Entities/Player/PlayerUpdates.cpp
 +++ b/src/server/game/Entities/Player/PlayerUpdates.cpp
-@@ -2249,6 +2249,13 @@ void Player::UpdateFallInformationIfNeed(MovementInfo const& minfo,
+@@ -2249,6 +2249,16 @@ void Player::UpdateFallInformationIfNeed(MovementInfo const& minfo,
  void Player::UpdateSpecCount(uint8 count)
  {
      uint32 curCount = GetSpecsCount();
++    LOG_INFO("spells.spec", "SPEC_DIAG_V1 update player={} guid={} requested={} current={} active={}",
++        GetName(), GetGUID().ToString(), count, curCount, GetActiveSpec());
++
 +    if (!IsValidTalentSpecCount(count))
 +    {
 +        LOG_ERROR("entities.player", "Player {} attempted to set invalid talent specialization count {}.",
@@ -151,7 +154,7 @@ index 5765a19..4013aa7 100644
      if (curCount == count)
          return;
  
-@@ -2262,17 +2269,21 @@ void Player::UpdateSpecCount(uint8 count)
+@@ -2262,17 +2272,21 @@ void Player::UpdateSpecCount(uint8 count)
      if (count > curCount)
      {
          _SaveActions(trans); // make sure the button list is cleaned up
@@ -182,6 +185,16 @@ index 5765a19..4013aa7 100644
      }
      // Delete spec data for removed spec.
      else if (count < curCount)
+@@ -2293,6 +2307,9 @@ void Player::UpdateSpecCount(uint8 count)
+     SetSpecsCount(count);
+ 
+     SendTalentsInfoData(false);
++    LOG_INFO("spells.spec", "SPEC_DIAG_V1 update completed player={} count={} active={} talent_packet_sent=true",
++        GetName(), GetSpecsCount(), GetActiveSpec());
++
+ }
+ 
+ void Player::SendUpdateWorldState(uint32 variable, uint32 value) const
 diff --git a/src/server/game/Scripting/ScriptDefines/PlayerScript.h b/src/server/game/Scripting/ScriptDefines/PlayerScript.h
 index be1969b..4e52863 100644
 --- a/src/server/game/Scripting/ScriptDefines/PlayerScript.h
@@ -204,8 +217,24 @@ index be1969b..4e52863 100644
       * refusal in world is undone the next time one of them runs.
       *
       * What it sees can be indirect: a trainer entry that wraps other spells (a paladin's Summon
+diff --git a/src/server/game/Spells/Spell.cpp b/src/server/game/Spells/Spell.cpp
+index 3ebd08d..e7cbdfb 100644
+--- a/src/server/game/Spells/Spell.cpp
++++ b/src/server/game/Spells/Spell.cpp
+@@ -5864,6 +5864,11 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGOT
+ 
+     bool preventDefault = CallScriptEffectHandlers((SpellEffIndex)i, mode);
+ 
++    if (m_spellInfo->Id == 63624)
++        LOG_INFO("spells.spec", "SPEC_DIAG_V1 dispatch spell={} effect={} mode={} value={} target={} prevented={}",
++            m_spellInfo->Id, uint32(eff), uint32(mode), damage,
++            unitTarget ? unitTarget->GetGUID().ToString() : "none", preventDefault);
++
+     if (!preventDefault && eff < TOTAL_SPELL_EFFECTS)
+     {
+         (this->*SpellEffects[eff])((SpellEffIndex)i);
 diff --git a/src/server/game/Spells/SpellEffects.cpp b/src/server/game/Spells/SpellEffects.cpp
-index d684660..57c71bd 100644
+index d684660..f084f0b 100644
 --- a/src/server/game/Spells/SpellEffects.cpp
 +++ b/src/server/game/Spells/SpellEffects.cpp
 @@ -230,8 +230,8 @@ pEffect SpellEffects[TOTAL_SPELL_EFFECTS] =
@@ -219,7 +248,29 @@ index d684660..57c71bd 100644
      &Spell::EffectNULL,                                     //163 unused
      &Spell::EffectRemoveAura,                               //164 SPELL_EFFECT_REMOVE_AURA
  };
-@@ -6497,7 +6497,14 @@ void Spell::EffectActivateSpec(SpellEffIndex /*effIndex*/)
+@@ -6483,7 +6483,20 @@ void Spell::EffectSpecCount(SpellEffIndex /*effIndex*/)
+ 
+     if (Player* player = unitTarget->ToPlayer())
+     {
+-        player->UpdateSpecCount(damage);
++        LOG_INFO("spells.spec", "SPEC_DIAG_V1 effect spell={} player={} guid={} value={} count_before={} active={}",
++            m_spellInfo->Id, player->GetName(), player->GetGUID().ToString(), damage,
++            player->GetSpecsCount(), player->GetActiveSpec());
++
++        if (damage < 1 || damage > MAX_TALENT_SPECS)
++        {
++            LOG_ERROR("spells.spec", "SPEC_DIAG_V1 rejected spell={} player={} invalid specialization count={}",
++                m_spellInfo->Id, player->GetName(), damage);
++            return;
++        }
++
++        player->UpdateSpecCount(uint8(damage));
++        LOG_INFO("spells.spec", "SPEC_DIAG_V1 effect completed spell={} player={} count_after={} active={}",
++            m_spellInfo->Id, player->GetName(), player->GetSpecsCount(), player->GetActiveSpec());
+     }
+ }
+ 
+@@ -6497,7 +6510,14 @@ void Spell::EffectActivateSpec(SpellEffIndex /*effIndex*/)
  
      if (Player* player = unitTarget->ToPlayer())
      {
